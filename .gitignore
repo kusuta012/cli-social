@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+Thumbs.db

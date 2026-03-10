@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cli-social"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+dependencies = [
+    "cryptography",
+    "argon2-cffi",
+    "kademlia",
+    "textual",
+    "click",
+    "aiosqlite"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio"
+]
+
+[project.scripts]
+cli-social = "cli_social.commands.cli:main"
+
+[tools.setuptools.packages.find]
+where = ["."]
+include = ["cli_social*"]
