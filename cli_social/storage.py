@@ -171,7 +171,7 @@ class Storage:
         peer_id: str,
         limit: int = 50 ,
     ) -> list[dict]:
-        async with self,self._db.execute(
+        async with self._db.execute(
             """
             SELECT m.id, m.sender_peer_id, m.content, m.sent_at, m.is_outgoing, m.delivered
             FROM messages m
