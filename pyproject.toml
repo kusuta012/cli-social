@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-cli-social = "cli_social.commands.cli:main"
+sxcl = "cli_social.cmds.cli:main"
 
 [tools.setuptools.packages.find]
 where = ["."]
