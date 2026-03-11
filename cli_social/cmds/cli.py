@@ -82,3 +82,8 @@ def contacts():
     for c in results:
         name = c["username"] or "(no name)"
         click.echo(f"{name:<20} {c['peer_id']}")
+
+@main.command()
+def tui():
+    from cli_social.tui import run
+    run()
