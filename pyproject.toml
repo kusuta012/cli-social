@@ -16,7 +16,8 @@ dependencies = [
     "kademlia",
     "textual",
     "click",
-    "aiosqlite"
+    "aiosqlite",
+    "noiseprotocol"
 ]
 
 [project.optional-dependencies]
