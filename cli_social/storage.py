@@ -166,6 +166,13 @@ class Storage:
        # yo phone linging.. yo phone linging big boy come pick up ur phone, why you no pick up ur phone ... yo phone linging 
        # ignore these random comments ahh
        
+       #tung tung tung tung tung tung tung sahur :O
+    async def mark_delivered(self, message_id: int) -> None:
+        await self._db.execute(
+            "UPDATE message SET delivered = 1 WHERE id = ?", (message_id)
+        )
+        await self._db.commit()
+
     async def get_messages(
         self,
         peer_id: str,

@@ -93,24 +93,31 @@ class Daemon:
             )
             logger.info(f"handhshake completed {peer_addr}")
             
-            async def _msg_handler(peer_id: str, content: str) -> None:
-                await self._on_message(peer_id, content)
-                
-            await session.listen(_msg_handler)
+            async def _msg_handler(peer_id: str, content: str, message_id: int) -> None:
+                await self._on_message(peer_id, content, session)
+            
+            await session.listen(_msg_handler, on_receipt=None)
             
         except Exception as e:
             logger.error(f"connection from {peer_addr} failed {e}")
         finally:
             writer.close()
             
-    async def _on_message(self, peer_id: str, content: str) -> None:
+    async def _on_message(self, peer_id: str, content: str, session: NoiseSession) -> None:
+        message_id = -1
         if self._storage:
-            await self._storage.save_message(
+            message_id = await self._storage.save_message(
                 peer_id=peer_id,
                 sender_peer_id=peer_id,
                 content=content,
                 is_outgoing=False
             )
         
+        try:
+            await session.send_receipt(message_id)
+            logger.debug(f"sent receipt {message_id} to {peer_id[:12]}")
+        except Exception as e:
+            logger.warning(f"failed to send receipt: {e}")
+            
         if self.on_message:
             await self.on_message(peer_id, content)

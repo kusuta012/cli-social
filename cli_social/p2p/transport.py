@@ -12,7 +12,8 @@ from noise.backends.default import diffie_hellmans as DH
 logger = logging.getLogger(__name__)
 
 MAX_FRAME_SIZE = 64 * 1024
-MessageHandler = Callable[[str, str], Awaitable[None]]
+MessageHandler = Callable[[str, str, int], Awaitable[None]]
+ReceiptHandler = Callable[[int], Awaitable[None]]
 
 
 def generate_noise_keypair() -> tuple[bytes, bytes]:
@@ -95,6 +96,7 @@ class NoiseSession:
         
     async def send(self, content: str) -> None:
         payload = json.dumps({
+            "type": "message",
             "peer_id": self.our_peer_id,
             "content": content,
             "timestamp": datetime.now(timezone.utc).isoformat()
@@ -102,17 +104,32 @@ class NoiseSession:
         encrypted = self._noise.encrypt(payload)
         await _write_frame(self._writer, encrypted)
         logger.debug(f"sent to {self.remote_peer_id[:12]}")
+    
+    async def send_receipt(self, message_id: int) -> None:
+        payload = json.dumps({
+            "type": "receipt",
+            "message_id": message_id
+        }).encode()
+        encrypted = self._noise.encrypt(payload)
+        await _write_frame(self._writer, encrypted)
+        logger.debug(f"sent receipt for {message_id} to {self.remote_peer_id[:12]}")
         
     async def receive(self) -> dict:
         frame = await _read_frame(self._reader)
         plaintext = self._noise.decrypt(frame)
         return json.loads(plaintext)
     
-    async def listen(self, on_message: MessageHandler) -> None:
+    async def listen(self, on_message: MessageHandler, on_receipt: ReceiptHandler | None = None) -> None:
         try:
             while True:
                 msg = await self.receive()
-                await on_message(msg["peer_id"], msg["content"])
+                msg_type = msg.get("type", "message")
+                
+                if msg_type == "receipt":
+                    if on_receipt and "message_id" in msg:
+                        await on_receipt(msg["message_id"])
+                elif msg_type == "message":
+                    await on_message(msg["peer_id"], msg["content"], msg.get("message_id", -1))
         except asyncio.IncompleteReadError:
             logger.info(f"peer {self.remote_peer_id[:12]} disconnected")
         except Exception as e:
