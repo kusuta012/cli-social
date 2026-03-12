@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey
 )
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import (
     Encoding, 
@@ -52,20 +53,29 @@ def generate_identity(
     
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
-    private_bytes = private_key.private_bytes(
-        Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-    )
+    private_bytes = private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    
+    noise_private = X25519PrivateKey.generate()
+    noise_private_bytes = noise_private.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    noise_public_bytes = noise_private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    
     salt = secrets.token_bytes(ARGON2_SALT_LEN)
     aes_key = _derive_key(passphrase, salt)
     nonce = secrets.token_bytes(AES_NONCE_LEN)
     aesgcm = AESGCM(aes_key)
     ciphertext= aesgcm.encrypt(nonce, private_bytes, None)
+    noise_nonce = secrets.token_bytes(AES_NONCE_LEN)
+    noise_ciphertext = aesgcm.encrypt(noise_nonce, noise_private_bytes, None)
+    
     peer_id = _peer_id_from_public_key(public_key)
     payload = {
         "version": 1,
         "argon2_salt": salt.hex(),
         "aes_nonce": nonce.hex(),
         "ciphertext": ciphertext.hex(),
+        "noise_nonce": noise_nonce.hex(),
+        "noise_ciphertext": noise_ciphertext.hex(),
+        "noise_public_key": noise_public_bytes.hex(),
         "peer_id": peer_id,
         "username": username,
     }
@@ -83,7 +93,7 @@ def generate_identity(
 def load_identity(
     passphrase: str,
     key_file: Path = DEFAULT_KEY_FILE
-) -> tuple[Ed25519PrivateKey, Ed25519PublicKey, str, str]:
+) -> tuple[Ed25519PrivateKey, Ed25519PublicKey, str, str, bytes]:
     
     if not key_file.exists():
         raise FileNotFoundError(f"No identity found at {key_file}")
@@ -103,12 +113,17 @@ def load_identity(
     except Exception as exc:
         raise ValueError("Decryption failed!! wrong passphrase or corrupt key file") from exc
     
+    noise_nonce = bytes.fromhex(payload["noise_nonce"])
+    noise_ciphertext = bytes.fromhex(payload["noise_ciphertext"])
+    noise_private_bytes = aesgcm.decrypt(noise_nonce, noise_ciphertext, None)
+    
+    
     private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
     public_key = private_key.public_key()
     peer_id = _peer_id_from_public_key(public_key)
     username = payload.get("username", "")
     
-    return private_key, public_key, peer_id, username
+    return private_key, public_key, peer_id, username, noise_private_bytes
 
 def identity_exists(key_file: Path = DEFAULT_KEY_FILE) -> bool:
     return key_file.exists()

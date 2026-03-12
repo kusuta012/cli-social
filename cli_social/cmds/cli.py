@@ -22,11 +22,8 @@ def _require_identity() -> tuple[str, bytes, str]:
     passphrase = click.prompt("Passphrase", hide_input=True)
     
     try:
-        private_key, _, peer_id, username = load_identity(passphrase)
-        private_key_bytes = private_key.private_bytes(
-            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-        )
-        return peer_id, private_key_bytes, username
+        _, _, peer_id, username, noise_private_bytes = load_identity(passphrase)
+        return peer_id, noise_private_bytes, username
     except ValueError:
         click.echo("Wrong passphrase! you forgot your password?? dumbahh")
         raise SystemExit(1)
@@ -93,7 +90,8 @@ def contacts():
 @main.command()
 def tui():
     from cli_social.tui import run
-    run()
+    peer_id, private_key, username = _require_identity()
+    run(peer_id=peer_id, private_key=private_key, username=username)
 
 @main.command()
 @click.option("--port", default=9000, help="TCP listen port")
