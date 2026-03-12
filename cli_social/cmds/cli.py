@@ -88,10 +88,19 @@ def contacts():
         click.echo(f"{name:<20} {c['peer_id']}")
 
 @main.command()
-def tui():
+@click.option("--port", default=9000, help="TCP listen port")
+@click.option("--dht-port", default=6969, help="DHT listen port")
+@click.option("--bootstrap", multiple=True, help="bootstrap nodes as host:port")
+def tui(port , dht_port, bootstrap):
     from cli_social.tui import run
     peer_id, private_key, username = _require_identity()
-    run(peer_id=peer_id, private_key=private_key, username=username)
+    
+    bootstrap_nodes = []
+    for node in bootstrap:
+        h, p = node.rsplit(":", 1)
+        bootstrap_nodes.append((h, int(p)))
+        
+    run(peer_id=peer_id, private_key=private_key, username=username, listen_port=port, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes)
 
 @main.command()
 @click.option("--port", default=9000, help="TCP listen port")

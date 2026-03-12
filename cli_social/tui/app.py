@@ -1,5 +1,5 @@
 from __future__ import annotations
-# import asyncio
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 from textual.app import App, ComposeResult
@@ -8,6 +8,7 @@ from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
 from cli_social.storage import Storage
 from cli_social.p2p.transport import connect
+from cli_social.p2p.daemon import Daemon
 class ConversationItem(ListItem):
     def __init__(self, peer_id: str, username: str, unread: int = 0) -> None:
         super().__init__()
@@ -90,6 +91,7 @@ class ChatPane(Vertical):
     """
     
     current_peer_id: reactive[Optional[str]] = reactive(None)
+    current_username: str = ""
     
     def compose(self) -> ComposeResult:
         yield Label("Select a conversation", id="chat-header")
@@ -97,8 +99,9 @@ class ChatPane(Vertical):
     
     async def load_messages(self, peer_id: str, username: str) -> None:
         self.current_peer_id = peer_id
+        self.current_username = username
         self.query_one("#chat-header", Label).update(
-            f"{username or peer_id[:16]}"
+            f"{username or peer_id[:16]}  [dim]●[/dim]"
         )
         
         scroll = self.query_one("#message-scroll", ScrollableContainer)
@@ -127,6 +130,12 @@ class ChatPane(Vertical):
         )
         await scroll.mount(bubble)
         scroll.scroll_end(animate=True)
+    
+    def set_status(self, status: str) -> None:
+        dot = {"ok": "[green]●[/green]", "error": "[red]●[/red]", "connecting": "[yellow]●[/yellow]"}.get(status, "[dim]●[/dim]")
+        header = self.query_one("#chat-header", Label)
+        name = self.current_username or (self.current_peer_id or "")[:16]
+        header.update(f"{name} {dot}")
         
 class InputBar(Horizontal):
     DEFAULT_CSS = """
@@ -156,13 +165,39 @@ class ChatModal(Vertical):
     def compose(self) -> ComposeResult:
         yield Label("Start a new conversation")
         yield Label("Enter Peer ID: ")
-        yield Input(placeholder="Peer ID...", id="chat-input")    
+        yield Input(placeholder="Peer ID...", id="chat-input")
+        yield Label("", id="chat-modal-error")
+        
+    def _validate_peer_id(self, peer_id: str, own_peer_id: str) -> str | None:
+        if len(peer_id) !=64 or not all(c in "0123456789abcdef" for c in peer_id):
+            return "Invalid peer ID, must be 64 hex characters"
+        if peer_id == own_peer_id:
+            return "That's your own peer ID, FOOL"
+        return None
     
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        peer_id = event.value.strip()
-        if peer_id:
-            await self.app.start_conversation(peer_id)  # type: ignore
+        peer_id = event.value.strip().lower()
+        app: CLISocialApp = self.app  # type: ignore[assignment]
+        err_label = self.query_one("#chat-modal-error", Label)
+        error = self._validate_peer_id(peer_id, app.peer_id)
+        if error:
+            err_label.update(f"[red]{error}[/red]")
+            return
+
+        async with await Storage.open() as s:
+            convos= await s.get_conversations()
+        existing = [c for c in convos if c["peer_id"] == peer_id]
+        if existing:
+            err_label.update("[yellow]Conversation already exists[/yellow]")
+            await app.on_existing_conversation(peer_id)
+            self.remove()
+            return
+            
+        await self.app.start_conversation(peer_id)  # type: ignore
         self.remove()
+        
+class PeerNotFoundError(Exception):
+    pass
     
 class CLISocialApp(App):
     TITLE = "cli-social"
@@ -186,13 +221,18 @@ class CLISocialApp(App):
     BINDINGS = [
         ("ctrl+q", "quit",          "Quit"),
         ("ctrl+n", "new_chat",      "New Chat"),
-        ("escape", "blur-input",    "Sidebar")
+        ("escape", "blur_input",    "Sidebar")
     ]
-    def __init__(self, peer_id: str, private_key: bytes, username: str) -> None:
+    def __init__(self, peer_id: str, private_key: bytes, username: str, listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None) -> None:
         super().__init__()
         self.peer_id = peer_id
         self.private_key = private_key
         self.username = username
+        self.listen_port = listen_port
+        self.dht_port = dht_port
+        self.bootstrap_nodes = bootstrap_nodes or []
+        self._daemon: Daemon | None = None
+        self._daemon_task: asyncio.Task | None = None
     
     
     def compose(self) -> ComposeResult:
@@ -204,8 +244,26 @@ class CLISocialApp(App):
         yield Footer()
      
     async def on_mount(self) -> None:
+        await self._start_daemon()
         await self._load_conversations()
         self.set_focus(self.query_one("#conversation-list"))
+        
+    async def _start_daemon(self) -> None:
+        try:
+            self._daemon = Daemon(
+                peer_id=self.peer_id,
+                private_key=self.private_key,
+                username=self.username,
+                listen_port=self.listen_port,
+                dht_port=self.dht_port,
+                bootstrap_nodes=self.bootstrap_nodes,
+                on_message=self.handle_incoming
+            )
+            await self._daemon.start()
+            self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
+            self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
+        except Exception as e:
+            self.notify(f"Daemon failed to start: {e}", severity="error", timeout=8)
     
     async def _load_conversations(self) -> None:
         async with await Storage.open() as s:
@@ -224,6 +282,17 @@ class CLISocialApp(App):
         async with await Storage.open() as s:
             await s.get_or_create_conversation(peer_id)
         await self._load_conversations()
+    
+    async def on_existing_conversation(self, peer_id: str) -> None:
+        lv = self.query_one("#conversation-list", ListView)
+        items = list(lv.query(ConversationItem))
+        for i, item in enumerate(items):
+            if item.peer_id == peer_id:
+                lv.index = i
+                chat = self.query_one(ChatPane)
+                await chat.load_messages(item.peer_id, item.username)
+                self.set_focus(self.query_one("#message-input"))
+            
     
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
@@ -253,9 +322,11 @@ class CLISocialApp(App):
     
     
     async def _send_message(self, peer_id: str, content: str) -> None:
+        chat = self.query_one(ChatPane)
+        chat.set_status("connecting")
+        
         try:
-            host = "127.0.0.1"
-            port = 9000
+            host, port = await self._lookup_peer(peer_id)
             session = await connect(host=host, port=port, our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id)
             await session.send(content)
             session.close()
@@ -268,23 +339,44 @@ class CLISocialApp(App):
                     content=content,
                     is_outgoing=True
                 )
-            chat = self.query_one(ChatPane)
             await chat.append_message(content, "you", now, is_outgoing=True)
-        
+            chat.set_status("ok")
+            
+        except PeerNotFoundError:
+            self.notify("Peer not found in DHT! are they online?", severity="error")
+            chat.set_status("error")
         except Exception as e:
             self.notify(f"Failed to send: {e}", severity="error")
+            chat.set_status("error")
     
-    async def handle_incoming(self, peer_id: str, content: str) -> None:
+    async def _lookup_peer(self, peer_id: str) -> tuple[str, int]:
+        if self._daemon and self._daemon._dht:
+            try:
+                info = await self._daemon._dht.lookup(peer_id)
+                if info:
+                    return info.host, info.port
+            except Exception:
+                pass
+        raise PeerNotFoundError(f"No DHT entry for {peer_id[:16]}, confirm their peer id?")
+                    
+    async def handle_incoming(self, peer_id: str, content: str) -> None:    
         now = datetime.now(timezone.utc).isoformat()
         chat = self.query_one(ChatPane)
         if chat.current_peer_id == peer_id:
-            await chat.append_message(content, peer_id[:10], now, is_outgoing=False)
+            username = peer_id[:10]
+            for item in self.query(ConversationItem):
+                if item.peer_id == peer_id:
+                    username = item.username or peer_id[:10]
+                    break
+            await chat.append_message(content, username, now, is_outgoing=False)
         else:
             self.notify(f"New message from {peer_id[:12]}....")
         await self._load_conversations()
         
 
     def action_quit(self) -> None:
+        if self._daemon_task:
+            self._daemon_task.cancel()
         self.exit()
         
     def action_new_chat(self) -> None:
@@ -294,5 +386,5 @@ class CLISocialApp(App):
     def action_blur_input(self) -> None:
         self.set_focus(self.query_one("#conversation-list"))
         
-def run(peer_id: str = "", private_key: bytes = b"", username: str = "") -> None:
-    CLISocialApp(peer_id=peer_id, private_key=private_key, username=username).run()
+def run(peer_id: str = "", private_key: bytes = b"", username: str = "", listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None) -> None:
+    CLISocialApp(peer_id=peer_id, private_key=private_key, username=username, listen_port=listen_port, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes or []).run()
