@@ -15,6 +15,7 @@ from cli_social.p2p.transport import connect
 from cli_social.p2p.dht import DHTNode
 # from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
+
 DATA_DIR_OPTION = click.option(
     "--data-dir",
     default=None,
@@ -107,8 +108,17 @@ def contacts(data_dir):
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="bootstrap nodes as host:port")
 def tui(port , dht_port, bootstrap, data_dir):
+    import logging
+
+    logging.basicConfig(
+    filename=f"{data_dir or Path.home() / '.cli-social'}/debug.log",
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s"
+    )
+
+    
     from cli_social.tui import run
-    peer_id, private_key, username = _require_identity(data_dir)
+    peer_id, private_key, username = _require_identity(data_dir)    
     
     bootstrap_nodes = []
     for node in bootstrap:
@@ -160,13 +170,17 @@ def daemon(port, dht_port, bootstrap, data_dir):
 @click.argument("peer_id")
 @click.option("--username", default="", help="Optional username for this contact")
 @click.option("--public-key", default="", help="contact's public key (hex)")
-def add(peer_id, username, public_key, data_dir):
+@click.option("--host", default="", help="Direct host for local testing")
+@click.option("--port", default=0, help="Direct port for local testing")
+def add(peer_id, username, public_key, host, port, data_dir):
     async def _add():
         async with await Storage.open(db_path_for(data_dir)) as s:
             await s.add_contact(
                 peer_id=peer_id,
                 username=username,
-                public_key=public_key
+                public_key=public_key,
+                host=host,
+                port=port
             )
     asyncio.run(_add())
     click.echo(f"Contact added {username or peer_id}")

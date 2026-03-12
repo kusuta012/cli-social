@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     peer_id TEXT PRIMARY KEY,
     username TEXT NOT NULL DEFAULT '',
     public_key TEXT NOT NULL DEFAULT '',
+    host TEXT NOT NULL DEFAULT '',
+    port INTEGER NOT NULL DEFAULT 0,
     added_at TEXT NOT NULL
 );
 
@@ -68,22 +70,26 @@ class Storage:
         peer_id: str,
         username: str = "",
         public_key: str = "",
+        host: str = "",
+        port: int = 0
     ) -> None:
         await self._db.execute(
             """
-            INSERT INTO contacts (peer_id, username, public_key, added_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO contacts (peer_id, username, public_key, host, port, added_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(peer_id) DO UPDATE SET
                 username = excluded.username,
-                public_key = excluded.public_key
+                public_key = excluded.public_key,
+                host = excluded.host,
+                port = excluded.port
             """,
-            (peer_id, username, public_key, _now())
+            (peer_id, username, public_key, host, port, _now())
         )
         await self._db.commit()
         
     async def get_contacts(self) -> list[dict]:
         async with self._db.execute(
-            "SELECT peer_id, username, public_key, added_at FROM contacts ORDER BY username"
+            "SELECT peer_id, username, public_key, host, port, added_at FROM contacts ORDER BY username"
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -174,7 +180,7 @@ class Storage:
        #tung tung tung tung tung tung tung sahur :O
     async def mark_delivered(self, message_id: int) -> None:
         await self._db.execute(
-            "UPDATE message SET delivered = 1 WHERE id = ?", (message_id)
+            "UPDATE messages SET delivered = 1 WHERE id = ?", (message_id,)
         )
         await self._db.commit()
 

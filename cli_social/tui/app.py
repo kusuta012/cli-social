@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
@@ -11,6 +12,7 @@ from cli_social.storage import Storage, DEFAULT_DB_PATH
 from cli_social.p2p.transport import connect
 from cli_social.p2p.daemon import Daemon
 
+logger = logging.getLogger(__name__)
 
 class ConversationItem(ListItem):
     def __init__(self, peer_id: str, username: str, unread: int = 0) -> None:
@@ -122,7 +124,7 @@ class ChatPane(Vertical):
         scroll = self.query_one("#message-scroll", ScrollableContainer)
         await scroll.remove_children()
 
-        async with await Storage.open() as s:
+        async with await Storage.open(db_path) as s:
             messages = await s.get_messages(peer_id, limit=50)
 
         for msg in messages:
@@ -260,6 +262,7 @@ class CLISocialApp(App):
         self.db_path = db_path
         self._daemon: Daemon | None = None
         self._daemon_task: asyncio.Task | None = None
+        self._reannounce_task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -288,6 +291,8 @@ class CLISocialApp(App):
             )
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
+            if self._daemon._dht:
+                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, listen_port=self.listen_port, host="127.0.0.1"), name="dht_reannounce")
             self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
         except Exception as e:
             self.notify(f"Daemon failed to start: {e}", severity="error", timeout=8)
@@ -391,13 +396,26 @@ class CLISocialApp(App):
             chat.set_status("error")
 
     async def _lookup_peer(self, peer_id: str) -> tuple[str, int]:
+        async with await Storage.open(self.db_path) as s:
+            contact = await s.get_contact(peer_id)
+            logger.debug(f"contact lookup for {peer_id[:12]}: {contact}")
+            if contact and contact.get("host") and contact.get("port"):
+                logger.debug(f"using direct address {contact['host']:{contact['port']}}")
+                return contact["host"], int(contact["port"])
+            else:
+                logger.debug(f"contact found but missing host/port, ")
+            
         if self._daemon and self._daemon._dht:
-            try:
-                info = await self._daemon._dht.lookup(peer_id)
-                if info:
-                    return info.host, info.port
-            except Exception:
-                pass
+            for attempt in range(3):
+                try:
+                    info = await self._daemon._dht.lookup(peer_id)
+                    if info:
+                        return info.host, info.port
+                except Exception:
+                    pass
+                if attempt < 2:
+                    await asyncio.sleep(1)
+                
         raise PeerNotFoundError(f"No DHT entry for {peer_id[:16]}, confirm their peer id?")
 
     async def handle_incoming(self, peer_id: str, content: str) -> None:
@@ -417,6 +435,8 @@ class CLISocialApp(App):
     def action_quit(self) -> None:
         if self._daemon_task:
             self._daemon_task.cancel()
+        if self._reannounce_task:
+            self._reannounce_task.cancel()
         self.exit()
 
     def action_new_chat(self) -> None:
