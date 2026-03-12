@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 """
 
+def db_path_for(data_dir: Path | None) -> Path:
+    if data_dir is not None:
+        return data_dir / "data.db"
+    return DEFAULT_DB_PATH
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

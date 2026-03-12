@@ -59,6 +59,7 @@ class DHTNode:
         
         if self.bootstrap_nodes:
             await self._server.bootstrap(self.bootstrap_nodes)
+            await asyncio.sleep(1)
             logger.info(f"bootsrapped with {self.bootstrap_nodes}")
         else:
             logger.warning("No nodes configured | in local mode")
@@ -69,10 +70,10 @@ class DHTNode:
             self._started = False
             logger.info("DHT node stopped")
             
-    async def announce(self, username: str = "", listen_port: int = 9000) -> None:
+    async def announce(self, username: str = "", listen_port: int = 9000, host: str = "127.0.0.1") -> None:
         info = PeerInfo(
             peer_id=self.peer_id,
-            host=self.host,
+            host=host,
             port=listen_port,
             username=username
         )

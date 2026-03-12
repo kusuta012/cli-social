@@ -2,11 +2,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional
+from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, Label
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
-from cli_social.storage import Storage
+from cli_social.storage import Storage, DEFAULT_DB_PATH
 from cli_social.p2p.transport import connect
 from cli_social.p2p.daemon import Daemon
 
@@ -111,7 +112,7 @@ class ChatPane(Vertical):
         yield Label("Select a conversation", id="chat-header")
         yield ScrollableContainer(id="message-scroll")
 
-    async def load_messages(self, peer_id: str, username: str) -> None:
+    async def load_messages(self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH) -> None:
         self.current_peer_id = peer_id
         self.current_username = username
         self.query_one("#chat-header", Label).update(
@@ -206,7 +207,7 @@ class ChatModal(Vertical):
             err_label.update(f"[red]{error}[/red]")
             return
 
-        async with await Storage.open() as s:
+        async with await Storage.open(app.db_path) as s:
             convos = await s.get_conversations()
         existing = [c for c in convos if c["peer_id"] == peer_id]
         if existing:
@@ -248,7 +249,7 @@ class CLISocialApp(App):
         ("escape", "blur_input",    "Sidebar")
     ]
 
-    def __init__(self, peer_id: str, private_key: bytes, username: str, listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None) -> None:
+    def __init__(self, peer_id: str, private_key: bytes, username: str, listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None, db_path: Path = DEFAULT_DB_PATH) -> None:
         super().__init__()
         self.peer_id = peer_id
         self.private_key = private_key
@@ -256,6 +257,7 @@ class CLISocialApp(App):
         self.listen_port = listen_port
         self.dht_port = dht_port
         self.bootstrap_nodes = bootstrap_nodes or []
+        self.db_path = db_path
         self._daemon: Daemon | None = None
         self._daemon_task: asyncio.Task | None = None
 
@@ -281,7 +283,8 @@ class CLISocialApp(App):
                 listen_port=self.listen_port,
                 dht_port=self.dht_port,
                 bootstrap_nodes=self.bootstrap_nodes,
-                on_message=self.handle_incoming
+                on_message=self.handle_incoming,
+                db_path=self.db_path
             )
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
@@ -290,7 +293,7 @@ class CLISocialApp(App):
             self.notify(f"Daemon failed to start: {e}", severity="error", timeout=8)
 
     async def _load_conversations(self) -> None:
-        async with await Storage.open() as s:
+        async with await Storage.open(self.db_path) as s:
             convos = await s.get_conversations()
 
         lv = self.query_one("#conversation-list", ListView)
@@ -303,7 +306,7 @@ class CLISocialApp(App):
             ))
 
     async def start_conversation(self, peer_id: str) -> None:
-        async with await Storage.open() as s:
+        async with await Storage.open(self.db_path) as s:
             await s.get_or_create_conversation(peer_id)
         await self._load_conversations()
 
@@ -314,7 +317,7 @@ class CLISocialApp(App):
             if item.peer_id == peer_id:
                 lv.index = i
                 chat = self.query_one(ChatPane)
-                await chat.load_messages(item.peer_id, item.username)
+                await chat.load_messages(item.peer_id, item.username, db_path=self.db_path)
                 self.set_focus(self.query_one("#message-input"))
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -322,8 +325,8 @@ class CLISocialApp(App):
         if not isinstance(item, ConversationItem):
             return
         chat = self.query_one(ChatPane)
-        await chat.load_messages(item.peer_id, item.username)
-        async with await Storage.open() as s:
+        await chat.load_messages(item.peer_id, item.username, db_path=self.db_path)
+        async with await Storage.open(self.db_path) as s:
             convo_id = await s.get_or_create_conversation(item.peer_id)
             await s.mark_read(convo_id)
         self.set_focus(self.query_one("#message-input"))
@@ -353,7 +356,7 @@ class CLISocialApp(App):
             await session.send(content)
 
             now = datetime.now(timezone.utc).isoformat()
-            async with await Storage.open() as s:
+            async with await Storage.open(self.db_path) as s:
                 message_id = await s.save_message(
                     peer_id=peer_id,
                     sender_peer_id=self.peer_id,
@@ -366,7 +369,7 @@ class CLISocialApp(App):
             async def _wait_for_receipt() -> None:
                 async def on_receipt(recv_message_id: int) -> None:
                     if recv_message_id == message_id:
-                        async with await Storage.open() as s:
+                        async with await Storage.open(self.db_path) as s:
                             await s.mark_delivered(message_id)
                         for b in self.query(MessageBubble):
                             if b.message_id == message_id:
@@ -424,6 +427,6 @@ class CLISocialApp(App):
         self.set_focus(self.query_one("#conversation-list"))
 
 
-def run(peer_id: str = "", private_key: bytes = b"", username: str = "", listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None) -> None:
+def run(peer_id: str = "", private_key: bytes = b"", username: str = "", listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None, db_path: Path = DEFAULT_DB_PATH) -> None:
     CLISocialApp(peer_id=peer_id, private_key=private_key, username=username, listen_port=listen_port,
-                 dht_port=dht_port, bootstrap_nodes=bootstrap_nodes or []).run()
+                 dht_port=dht_port, bootstrap_nodes=bootstrap_nodes or [], db_path=db_path).run()

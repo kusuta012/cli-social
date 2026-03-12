@@ -4,8 +4,8 @@ import logging
 from typing import Callable, Awaitable
 from cli_social.p2p.transport import accept, NoiseSession
 from cli_social.p2p.dht import DHTNode
-from cli_social.storage import Storage
-
+from cli_social.storage import Storage, DEFAULT_DB_PATH
+from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
@@ -21,7 +21,8 @@ class Daemon:
         listen_port: int = 9000,
         dht_port: int = 6969,
         bootstrap_nodes: list[tuple[str, int]] = [],
-        on_message: MessageCallback | None = None
+        on_message: MessageCallback | None = None,
+        db_path: Path | None = None
     ):
         self.peer_id = peer_id
         self.private_key = private_key
@@ -30,6 +31,7 @@ class Daemon:
         self.dht_port = dht_port
         self.bootstrap_nodes = bootstrap_nodes
         self.on_message = on_message
+        self.db_path = db_path
         self._server: asyncio.Server | None = None
         self._dht: DHTNode | None = None
         self._storage: Storage | None = None
@@ -37,7 +39,7 @@ class Daemon:
 
     # coding this at 1am , I need caffeine !!
     async def start(self) -> None:
-        self._storage = await Storage.open()
+        self._storage = await Storage.open(self.db_path or DEFAULT_DB_PATH)
         self._dht = DHTNode(
             peer_id=self.peer_id,
             port=self.dht_port,
@@ -46,7 +48,8 @@ class Daemon:
         await self._dht.start()
         await self._dht.announce(
             username=self.username,
-            listen_port=self.listen_port
+            listen_port=self.listen_port,
+            host="127.0.0.1"
         )
         
         self._server = await asyncio.start_server(

@@ -42,6 +42,11 @@ def _peer_id_from_public_key(public_key: Ed25519PublicKey) -> str:
     raw = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
     return hashlib.sha256(raw).hexdigest()
 
+def _key_file_for(data_dir: Path | None) -> Path:
+    if data_dir is not None:
+        return data_dir / "identity.enc"
+    return DEFAULT_KEY_FILE
+
 def generate_identity(
     passphrase: str,
     username: str = "",
