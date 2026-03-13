@@ -25,7 +25,8 @@ class RelayConnection:
         self.reader = reader
         self.writer = writer
         self._alive = True
-
+        self.is_listener: bool = False
+        
     async def send_msg(self, msg: dict) -> None:
         await _write_msg(self.writer, msg)
 
@@ -91,6 +92,7 @@ class RelayServer:
                 return
 
             conn = RelayConnection(peer_id=msg["peer_id"], reader=reader, writer=writer)
+            conn.is_listener = msg.get("mode") == "listen"
             self._online[conn.peer_id] = conn
             await conn.send_msg({"type": "ok"})
             logger.info(f"peer {conn.peer_id[:12]} registered (mode={msg.get('mode', 'send')})")
@@ -117,7 +119,7 @@ class RelayServer:
         except Exception as e:
             logger.error(f"relay error for {conn.peer_id[:12] if conn else peer_addr} {e}")
         finally:
-            if conn:
+            if conn and not getattr(conn, "is_listener", False):
                 self._unregister(conn)
 
     async def _handle_connect(self, sender: RelayConnection, msg: dict) -> None:
@@ -147,6 +149,7 @@ class RelayServer:
             await sender.send_msg({"type": "ok"})
             logger.info(f"piping {sender.peer_id[:12]} | {target.peer_id[:12]}")
             await self._pipe(sender, target)
+            self._online.pop(sender.peer_id, None)
         else:
             await sender.send_msg({"type": "stored", "message_id": msg.get("message_id", "")})
             logger.debug(f"target {target_peer_id[:12]} offline , waiting for payload, D")
@@ -160,7 +163,7 @@ class RelayServer:
                 logger.warning(f"sender {sender.peer_id[:12]} timed out , oh oh did not receive payload")
 
     async def _pipe(self, a: RelayConnection, b: RelayConnection) -> None:
-        async def forward(src: RelayConnection, dst: RelayConnection) -> None:
+        async def forward(src: RelayConnection, dst: RelayConnection, close_dst: bool) -> None:
             try:
                 while src.alive and dst.alive:
                     frame = await src.receive_raw()
@@ -170,8 +173,9 @@ class RelayServer:
             except Exception as e:
                 logger.error(f"pipe error {src.peer_id[:12]} > {dst.peer_id[:12]}, error {e}")
             finally:
-                dst.close()
-        await asyncio.gather(forward(a, b), forward(b, a), return_exceptions=True)
+                if close_dst:
+                    dst.close()
+        await asyncio.gather(forward(a, b, close_dst=False), forward(b, a, close_dst=True), return_exceptions=True)
         logger.info(f"pipe closed {a.peer_id[:12]} | {b.peer_id[:12]}")
 
     def _store_payload(self, peer_id: str, payload: bytes) -> None:
