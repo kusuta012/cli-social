@@ -101,6 +101,17 @@ class Storage:
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+    
+    async def get_contact_pubkey(self, peer_id: str) -> str | None:
+        async with self._db.execute("SELECT public_key FROM contacts WHERE peer_id = ?", (peer_id,)) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return row["public_key"] or None
+    
+    async def update_contact_pubkey(self, peer_id: str, pubkey_hex: str) -> None:
+        await self._db.execute("UPDATE contacts SET public_key = ? WHERE peer_id = ?", (pubkey_hex, peer_id))
+        await self._db.commit()
         
     async def get_or_create_conversation(self, peer_id: str) -> int:
         async with self._db.execute(

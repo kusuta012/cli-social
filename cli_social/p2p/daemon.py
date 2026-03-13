@@ -73,7 +73,26 @@ class Daemon:
         
         if self.relay_host:
             await self._connect_to_relay()
-            
+    
+    # Idk how but on every night coding session I end up in this file
+    
+    async def _vrfy_or_store_pubkey(self, session: NoiseSession) -> None:
+        if not self._storage:
+            return
+        peer_id = session.remote_peer_id
+        stored = await self._storage.get_contact_pubkey(peer_id)
+        remote_key_hex = session.remote_static_key.hex()
+        
+        if not stored:
+            await self._storage.update_contact_pubkey(peer_id, remote_key_hex)
+            logger.info(f"stored pubkey for {peer_id[:12]}")
+        elif stored != remote_key_hex:
+            logger.warning(f"pub key mismatch for {peer_id[:12]}, possible spoofing")
+            session.close()
+            raise ValueError(f"pub key mismatch for {peer_id[:12]}")
+        else:
+            logger.debug(f"pubkey verified for {peer_id[:12]}")
+                        
     async def _connect_to_relay(self) -> None:
         try:
             reader, writer = await asyncio.open_connection(self.relay_host, self.relay_port)
@@ -113,6 +132,7 @@ class Daemon:
                             continue
                         
                         session = await accept(reader=pipe_reader, writer=pipe_writer, our_peer_id=self.peer_id, our_private_key=self.private_key, remote_peer_id=from_peer_id)
+                        await self._vrfy_or_store_pubkey(session)
                         
                         async def _msg_handler(peer_id: str, content: str, message_id: int, _session = session) -> None:
                             await self._on_message(peer_id, content, _session)
@@ -181,6 +201,7 @@ class Daemon:
                 our_peer_id=self.peer_id,
                 our_private_key=self.private_key
             )
+            await self._vrfy_or_store_pubkey(session)
             logger.info(f"handhshake completed {peer_addr}")
             
             async def _msg_handler(peer_id: str, content: str, message_id: int, _session: NoiseSession = session) -> None:
