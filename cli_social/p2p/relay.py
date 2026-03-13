@@ -99,7 +99,12 @@ class RelayServer:
             await self._flush_stored(conn)
         
             if msg.get("mode") == "listen":
-                await asyncio.Event().wait()
+                while conn.alive:
+                    await asyncio.sleep(30)
+                    try:
+                        await conn.send_msg({"type": "ping"})
+                    except Exception:
+                        break
                 return
 
             action = await conn.receive_msg()

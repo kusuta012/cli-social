@@ -382,23 +382,34 @@ class CLISocialApp(App):
                 )
             await chat.append_message(content, "you", now, is_outgoing=True, message_id=message_id)
             chat.set_status("ok")
-
-            async def _wait_for_receipt() -> None:
-                async def on_receipt(recv_message_id: int) -> None:
-                    if recv_message_id == message_id:
-                        async with await Storage.open(self.db_path) as s:
-                            await s.mark_delivered(message_id)
-                        for b in self.query(MessageBubble):
+            
+            # todo later , remove this condition , because we will have no direct connections later, all will go through relay nodes 
+            
+            if session._via_relay:
+                async with await Storage.open(self.db_path) as s:
+                    await s.mark_delivered(message_id)
+                for b in self.query(MessageBubble):
                             if b.message_id == message_id:
                                 b.mark_delivered()
                                 break
-
-                await session.listen(
-                    on_message=lambda p, c, mid: asyncio.sleep(0),
-                    on_receipt=on_receipt
-                )
                 session.close()
-            asyncio.create_task(_wait_for_receipt(), name=f"receipt; {message_id}")
+            else:
+                async def _wait_for_receipt() -> None:
+                    async def on_receipt(recv_message_id: int) -> None:
+                        if recv_message_id == message_id:
+                            async with await Storage.open(self.db_path) as s:
+                                await s.mark_delivered(message_id)
+                            for b in self.query(MessageBubble):
+                                if b.message_id == message_id:
+                                    b.mark_delivered()
+                                    break
+
+                    await session.listen(
+                        on_message=lambda p, c, mid: asyncio.sleep(0),
+                        on_receipt=on_receipt
+                    )
+                    session.close()
+                asyncio.create_task(_wait_for_receipt(), name=f"receipt; {message_id}")
 
         except PeerNotFoundError:
             self.notify("Peer not found in DHT! are they online?", severity="error")

@@ -113,6 +113,8 @@ class Daemon:
                     
                     except Exception as e:
                         logger.error(f"relay handshake failed with {from_peer_id[:12]}, err = {e}")
+                elif msg_type == "ping":
+                    logger.debug("relay keepalive ping")
                 elif msg_type == "error":
                     logger.warning(f"relay error {msg.get("reason")}")
                     
