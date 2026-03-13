@@ -107,7 +107,8 @@ def contacts(data_dir):
 @click.option("--port", default=9000, help="TCP listen port")
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="bootstrap nodes as host:port")
-def tui(port , dht_port, bootstrap, data_dir):
+@click.option("--relay", default=None, help="relay node as host:port")
+def tui(port , dht_port, bootstrap, relay, data_dir):
     import logging
 
     logging.basicConfig(
@@ -115,7 +116,6 @@ def tui(port , dht_port, bootstrap, data_dir):
     level=logging.DEBUG,
     format="%(asctime)s %(name)s %(levelname)s %(message)s"
     )
-
     
     from cli_social.tui import run
     peer_id, private_key, username = _require_identity(data_dir)    
@@ -124,8 +124,13 @@ def tui(port , dht_port, bootstrap, data_dir):
     for node in bootstrap:
         h, p = node.rsplit(":", 1)
         bootstrap_nodes.append((h, int(p)))
+    
+    relay_host, relay_port = None, 9100
+    if relay:
+        rh, rp = relay.rsplit(":", 1)
+        relay_host, relay_port = rh, int(rp)
         
-    run(peer_id=peer_id, private_key=private_key, username=username, listen_port=port, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes, db_path=db_path_for(data_dir))
+    run(peer_id=peer_id, private_key=private_key, username=username, listen_port=port, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes, db_path=db_path_for(data_dir), relay_host=relay_host, relay_port=relay_port)
 
 @main.command()
 @DATA_DIR_OPTION

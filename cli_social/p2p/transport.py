@@ -2,35 +2,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import struct
+import secrets
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
 from noise.connection import NoiseConnection, Keypair
 from noise.backends.default import diffie_hellmans as DH
+from cli_social.p2p.utils import read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 
-MAX_FRAME_SIZE = 64 * 1024
+
 MessageHandler = Callable[[str, str, int], Awaitable[None]]
 ReceiptHandler = Callable[[int], Awaitable[None]]
-
+REL_HOST = "64.227.164.21" # I will keep it hardcoded for now :)
+REL_PORT = 9100
 
 def generate_noise_keypair() -> tuple[bytes, bytes]:
     keypair = DH.ED25519().generate_keypair()
     return keypair.public_bytes, keypair.private.private_bytes_raw()
 
-
-async def _read_frame(reader: asyncio.StreamReader) -> bytes:
-    header = await reader.readexactly(4)
-    length = struct.unpack(">I", header)[0]
-    if length > MAX_FRAME_SIZE:
-        raise ValueError(f"frame is large: {length} bytes")
-    return await reader.readexactly(length)
-
-async def _write_frame(writer: asyncio.StreamWriter, data: bytes) -> None:
-    writer.write(struct.pack(">I", len(data)) + data)
-    await writer.drain()
     
 async def _do_handshake_initiator(
     reader: asyncio.StreamReader,
@@ -43,13 +33,13 @@ async def _do_handshake_initiator(
     noise.start_handshake()
     
     msg1 = noise.write_message()
-    await _write_frame(writer, bytes(msg1))
+    await write_frame(writer, bytes(msg1))
     
-    msg2 = await _read_frame(reader)
+    msg2 = await read_frame(reader)
     noise.read_message(msg2)
     
     msg3 = noise.write_message()
-    await _write_frame(writer, bytes(msg3))
+    await write_frame(writer, bytes(msg3))
     
     assert noise.handshake_finished, "Hanshake did not finish :("
     logger.debug("Noise handshake finished (init)")
@@ -66,13 +56,13 @@ async def _do_handshake_responder(
     noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private)
     noise.start_handshake()
     
-    msg1 = await _read_frame(reader)
+    msg1 = await read_frame(reader)
     noise.read_message(msg1)
     
     msg2 = noise.write_message()
-    await _write_frame(writer, bytes(msg2))
+    await write_frame(writer, bytes(msg2))
     
-    msg3 = await _read_frame(reader)
+    msg3 = await read_frame(reader)
     noise.read_message(msg3)
     
     assert noise.handshake_finished, "Hanshake did not finish :("
@@ -86,13 +76,15 @@ class NoiseSession:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         our_peer_id: str,
-        remote_peer_id: str
+        remote_peer_id: str,
+        via_relay: bool = False
     ):
         self._noise = noise
         self._reader = reader
         self._writer = writer
         self.our_peer_id = our_peer_id
         self.remote_peer_id = remote_peer_id
+        self._via_relay = via_relay
         
     async def send(self, content: str) -> None:
         payload = json.dumps({
@@ -102,8 +94,8 @@ class NoiseSession:
             "timestamp": datetime.now(timezone.utc).isoformat()
         }).encode()
         encrypted = self._noise.encrypt(payload)
-        await _write_frame(self._writer, encrypted)
-        logger.debug(f"sent to {self.remote_peer_id[:12]}")
+        await write_frame(self._writer, encrypted)
+        logger.debug(f"sent to {self.remote_peer_id[:12]} (relay={self._via_relay})")
     
     async def send_receipt(self, message_id: int) -> None:
         payload = json.dumps({
@@ -111,11 +103,11 @@ class NoiseSession:
             "message_id": message_id
         }).encode()
         encrypted = self._noise.encrypt(payload)
-        await _write_frame(self._writer, encrypted)
+        await write_frame(self._writer, encrypted)
         logger.debug(f"sent receipt for {message_id} to {self.remote_peer_id[:12]}")
         
     async def receive(self) -> dict:
-        frame = await _read_frame(self._reader)
+        frame = await read_frame(self._reader)
         plaintext = self._noise.decrypt(frame)
         return json.loads(plaintext)
     
@@ -154,9 +146,40 @@ async def connect(
         reader=reader,
         writer=writer,
         our_peer_id=our_peer_id,
-        remote_peer_id=their_peer_id
+        remote_peer_id=their_peer_id,
+        via_relay=False
     )
     
+async def connect_via_relay(our_peer_id: str, our_private_key: bytes, their_peer_id: str, relay_host: str = REL_HOST, relay_port: int = REL_PORT) -> NoiseSession:
+    logger.info(f"connecting via relay to {their_peer_id[:12]}")
+    
+    reader, writer = await asyncio.open_connection(relay_host, relay_port)
+    
+    reg = json.dumps({"type": "register", "peer_id": our_peer_id}).encode()
+    await write_frame(writer, reg)
+    ack  = json.loads(await read_frame(reader))
+    if ack.get("type") != "ok":
+        writer.close()
+        raise ConnectionError(f"relay registeration failed {ack.get('reason')}")
+
+    req = json.dumps({"type": "connect", "to": their_peer_id, "message_id": secrets.token_hex(8)}).encode()
+    await write_frame(writer, req)
+    
+    resp = json.loads(await read_frame(reader))
+    if resp.get("type") == "ok":
+        logger.info(f"relay pipe working to {their_peer_id[:12]}, now noise handhskae")
+        noise = await _do_handshake_initiator(reader, writer, our_private_key)
+        return NoiseSession(noise=noise, reader=reader, writer=writer, our_peer_id=our_peer_id, remote_peer_id=their_peer_id, via_relay=True)
+    
+    elif resp.get("type") == "stored":
+        # todo
+        logger.info(f"peer {their_peer_id[:12]} is offline , stored and fwd")
+        writer.close()
+        raise ConnectionError("store and fwd not yet, todo soon")
+    else:
+        writer.close()
+        raise ConnectionError(f"relay eror {resp.get('reason')}")
+
 async def accept(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -172,5 +195,6 @@ async def accept(
         reader=reader,
         writer=writer,
         our_peer_id=our_peer_id,
-        remote_peer_id=remote_peer_id
+        remote_peer_id=remote_peer_id,
+        via_relay=False
     )

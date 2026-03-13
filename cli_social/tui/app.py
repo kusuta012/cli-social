@@ -9,7 +9,7 @@ from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, L
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
 from cli_social.storage import Storage, DEFAULT_DB_PATH
-from cli_social.p2p.transport import connect
+from cli_social.p2p.transport import connect, connect_via_relay
 from cli_social.p2p.daemon import Daemon
 
 logger = logging.getLogger(__name__)
@@ -251,7 +251,7 @@ class CLISocialApp(App):
         ("escape", "blur_input",    "Sidebar")
     ]
 
-    def __init__(self, peer_id: str, private_key: bytes, username: str, listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None, db_path: Path = DEFAULT_DB_PATH) -> None:
+    def __init__(self, peer_id: str, private_key: bytes, username: str, listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None, db_path: Path = DEFAULT_DB_PATH, relay_host: str | None = None, relay_port: int = 9100) -> None:
         super().__init__()
         self.peer_id = peer_id
         self.private_key = private_key
@@ -263,6 +263,8 @@ class CLISocialApp(App):
         self._daemon: Daemon | None = None
         self._daemon_task: asyncio.Task | None = None
         self._reannounce_task: asyncio.Task | None = None
+        self.relay_host = relay_host
+        self.relay_port = relay_port
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -287,7 +289,9 @@ class CLISocialApp(App):
                 dht_port=self.dht_port,
                 bootstrap_nodes=self.bootstrap_nodes,
                 on_message=self.handle_incoming,
-                db_path=self.db_path
+                db_path=self.db_path,
+                relay_host=self.relay_host,
+                relay_port=self.relay_port
             )
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
@@ -356,8 +360,16 @@ class CLISocialApp(App):
         chat.set_status("connecting")
 
         try:
-            host, port = await self._lookup_peer(peer_id)
-            session = await connect(host=host, port=port, our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id)
+            session = None
+            try:
+                session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id)
+                logger.debug(f"relay connection to {peer_id[:12]} worked")
+            except Exception:
+                logger.info(f"relay failed :(, falling back to direct for {peer_id[:12]}")
+                host, port = await self._lookup_peer(peer_id)
+        
+                session = await asyncio.wait_for(connect(host=host, port=port, our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id), timeout=3)
+                logger.debug(f"direct connection to {peer_id[:12]} worked")
             await session.send(content)
 
             now = datetime.now(timezone.utc).isoformat()
@@ -447,6 +459,6 @@ class CLISocialApp(App):
         self.set_focus(self.query_one("#conversation-list"))
 
 
-def run(peer_id: str = "", private_key: bytes = b"", username: str = "", listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None, db_path: Path = DEFAULT_DB_PATH) -> None:
+def run(peer_id: str = "", private_key: bytes = b"", username: str = "", listen_port: int = 9000, dht_port: int = 6969, bootstrap_nodes: list[tuple[str, int]] | None = None, db_path: Path = DEFAULT_DB_PATH, relay_host: str | None = None, relay_port: int = 9100) -> None:
     CLISocialApp(peer_id=peer_id, private_key=private_key, username=username, listen_port=listen_port,
-                 dht_port=dht_port, bootstrap_nodes=bootstrap_nodes or [], db_path=db_path).run()
+                 dht_port=dht_port, bootstrap_nodes=bootstrap_nodes or [], db_path=db_path, relay_host=relay_host, relay_port=relay_port).run()
