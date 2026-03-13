@@ -77,7 +77,7 @@ class Daemon:
     async def _connect_to_relay(self) -> None:
         try:
             reader, writer = await asyncio.open_connection(self.relay_host, self.relay_port)
-            reg = json.dumps({"type": "register", "peer_id": self.peer_id}).encode()
+            reg = json.dumps({"type": "register", "peer_id": self.peer_id, "mode": "listen"}).encode()
             await write_frame(writer, reg)
             
             ack = json.loads(await read_frame(reader))

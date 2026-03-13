@@ -93,8 +93,12 @@ class RelayServer:
             conn = RelayConnection(peer_id=msg["peer_id"], reader=reader, writer=writer)
             self._online[conn.peer_id] = conn
             await conn.send_msg({"type": "ok"})
-            logger.info(f"peer {conn.peer_id[:12]} registered")
+            logger.info(f"peer {conn.peer_id[:12]} registered (mode={msg.get('mode', 'send')})")
             await self._flush_stored(conn)
+        
+            if msg.get("mode") == "listen":
+                await asyncio.Event().wait()
+                return
 
             action = await conn.receive_msg()
             action_type = action.get("type")
@@ -203,5 +207,13 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9100)
     args = parser.parse_args()
-    server = RelayServer(host=args.host, port=args.port)
-    asyncio.run(server.run_forever())
+    # I need max logging ahhhh
+    
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s %(message)s", handlers=[logging.StreamHandler(), logging.FileHandler("relay.log")])
+    
+    async def _main():
+        server = RelayServer(host=args.host, port=args.port)
+        await server.start()
+        logger.info(f"relay running on {args.host}:{args.port}")
+        await server.run_forever()
+    asyncio.run(_main())
