@@ -117,10 +117,17 @@ class RelayServer:
             
             if conn.is_listener:
                 while conn.alive:
-                    await asyncio.sleep(30)             # these bugs are getting too annoying
+                    await asyncio.sleep(15)             # these bugs are getting too annoying
                     try:
                         await conn.send_msg({"type": "ping"})
                         logger.debug(f"ping sent to {conn.peer_id[:12]}")
+                        pong = await asyncio.wait_for(conn.receive_msg(), timeout=10)
+                        if pong.get("type") != "pong":
+                            logger.warning(f"unexpected resonponse from {conn.peer_id[:12]}")
+                            break
+                    except asyncio.TimeoutError:
+                        logger.info(f"ping timeout for {conn.peer_id[:12]}, dropping :(")
+                        break
                     except Exception:
                         logger.info(f"ping failed for {conn.peer_id[:12]}, dropping :(")
                         break
