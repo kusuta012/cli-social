@@ -127,6 +127,9 @@ class Daemon:
             self._relay_reader = None
             self._relay_writer = None
             logger.info("relay listener stopped")
+            if self._running:
+                await asyncio.sleep(3)
+                await self._connect_to_relay()
             
     async def run_forever(self) -> None:
         if self._server is None:
