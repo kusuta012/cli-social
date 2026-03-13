@@ -105,7 +105,7 @@ class Daemon:
                     
                     try:
                         pipe_reader, pipe_writer = await asyncio.open_connection(self.relay_host, self.relay_port)
-                        await write_frame(writer, json.dumps({"type": "pipe", "session_id": session_id}).encode())
+                        await write_frame(pipe_writer, json.dumps({"type": "pipe", "session_id": session_id}).encode())
                         ack = json.loads(await read_frame(pipe_reader))
                         if ack.get("type") != "ok":
                             logger.error(f"pipe conn rejected {ack.get('reason')}")

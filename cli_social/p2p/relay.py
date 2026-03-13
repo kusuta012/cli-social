@@ -8,7 +8,7 @@ from cli_social.p2p.utils import read_frame, write_frame
 logger = logging.getLogger(__name__)
 
 STORE_MAX_MESSAGES = 100
-PIPE_TIMEOUT = 15
+PIPE_TIMEOUT = 60
 
 
 async def _write_msg(writer: asyncio.StreamWriter, msg: dict) -> None:
@@ -109,7 +109,8 @@ class RelayServer:
 
             conn = RelayConnection(peer_id=msg["peer_id"], reader=reader, writer=writer)
             conn.is_listener = msg.get("mode") == "listen"
-            self._online[conn.peer_id] = conn
+            if conn.is_listener:
+                self._online[conn.peer_id] = conn
             await conn.send_msg({"type": "ok"})
             logger.info(f"peer {conn.peer_id[:12]} registered (mode={msg.get('mode', 'send')})")
             await self._flush_stored(conn)
@@ -142,8 +143,8 @@ class RelayServer:
         except Exception as e:
             logger.error(f"relay error for {conn.peer_id[:12] if conn else peer_addr} {e}")
         finally:
-            if conn and not getattr(conn, "is_listener", False):
-                self._unregister(conn)
+            if conn is not None and conn.is_listener:
+                self._online.pop(conn.peer_id, None)
 
     async def _handle_connect(self, sender: RelayConnection, msg: dict) -> None:
         target_peer_id = msg.get("to")
