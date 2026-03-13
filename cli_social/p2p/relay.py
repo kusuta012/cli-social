@@ -2,12 +2,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 from cli_social.p2p.utils import read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 
 STORE_MAX_MESSAGES = 100
-PIPE_TIMEOUT = 10
+PIPE_TIMEOUT = 15
 
 
 async def _write_msg(writer: asyncio.StreamWriter, msg: dict) -> None:
@@ -55,6 +56,7 @@ class RelayServer:
         self._online: dict[str, RelayConnection] = {}
         self._store: dict[str, list[bytes]] = {}
         self._server: asyncio.Server | None = None
+        self._pending_pipes: dict[str, asyncio.Future[RelayConnection]] = {}
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -87,7 +89,21 @@ class RelayServer:
 
         try:
             msg = await asyncio.wait_for(_read_msg(reader), timeout=10)
-            if msg.get("type") != "register" or not msg.get("peer_id"):
+            msg_type = msg.get("type")
+            
+            if msg_type == "pipe":
+                session_id = msg.get("session_id", "")
+                future = self._pending_pipes.get(session_id)
+                if not future:
+                    await _write_msg(writer, {"type": "error", "reason": "unknown session_id"})
+                    return
+                pipe_conn = RelayConnection(peer_id=f"pipe_{session_id[:8]}", reader=reader, writer=writer)
+                await _write_msg(writer, {"type": "ok"})
+                future.set_result(pipe_conn)
+                await asyncio.Event().wait()
+                return
+            
+            if msg_type != "register" or not msg.get("peer_id"):
                 await _write_msg(writer, {"type": "error", "reason": "first message must register"})
                 return
 
@@ -97,13 +113,15 @@ class RelayServer:
             await conn.send_msg({"type": "ok"})
             logger.info(f"peer {conn.peer_id[:12]} registered (mode={msg.get('mode', 'send')})")
             await self._flush_stored(conn)
-        
-            if msg.get("mode") == "listen":
+            
+            if conn.is_listener:
                 while conn.alive:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(30)             # these bugs are getting too annoying
                     try:
                         await conn.send_msg({"type": "ping"})
+                        logger.debug(f"ping sent to {conn.peer_id[:12]}")
                     except Exception:
+                        logger.info(f"ping failed for {conn.peer_id[:12]}, dropping :(")
                         break
                 return
 
@@ -135,31 +153,33 @@ class RelayServer:
         target = self._online.get(target_peer_id)
         
         if target and target.alive:
+            session_id = secrets.token_hex(8)
+            future: asyncio.Future[RelayConnection] = asyncio.get_event_loop().create_future()
+            self._pending_pipes[session_id] = future
+            
             try:
-                await target.send_msg({"type": "incoming", "from": sender.peer_id})
-            except Exception as e:
-                logger.warning(f"faile dot notify {target.peer_id[:12]}, err {e}")
-                self._unregister(target)
-                target = None
-
-        if target and target.alive:
-            try:
-                ack = await asyncio.wait_for(target.receive_msg(), timeout=PIPE_TIMEOUT)
-                if ack.get("type") != "accept":
-                    await sender.send_msg({"type": "error", "reason": "target rejected conn"})
+                await target.send_msg({"type": "incoming", "from": sender.peer_id, "session_id": session_id})
+                logger.info(f"notified {target.peer_id[:12]} of incoming from {sender.peer_id[:12]}")
+                try:
+                    pipe_conn = await asyncio.wait_for(future, timeout=PIPE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    await sender.send_msg({"type": "error", "reason": "listener did not connect for pipe"})
                     return
-            except asyncio.TimeoutError:
-                await sender.send_msg({"type": "error", "reason": "target did not respond"})
-                return
-            await sender.send_msg({"type": "ok"})
-            logger.info(f"piping {sender.peer_id[:12]} | {target.peer_id[:12]}")
-            await self._pipe(sender, target)
-            self._online.pop(sender.peer_id, None)
+                
+                await sender.send_msg({"type": "ok"})
+                logger.info(f"piping {sender.peer_id[:12]} | {target.peer_id[:12]}")
+                await self._pipe(sender, pipe_conn)
+                logger.info(f"pipe done {sender.peer_id[:12]} | {target.peer_id[:12]}")
+                
+            except Exception as e:
+                logger.error(f"connect error {e}")
+                await sender.send_msg({"type": "error", "reason": str(e)})
+            finally:
+                self._pending_pipes.pop(session_id, None)
+            
         else:
             await sender.send_msg({"type": "stored", "message_id": msg.get("message_id", "")})
             logger.debug(f"target {target_peer_id[:12]} offline , waiting for payload, D")
-
-            # this is so tuff
             try:
                 payload = await asyncio.wait_for(sender.receive_raw(), timeout=PIPE_TIMEOUT)
                 self._store_payload(target_peer_id, payload)
@@ -168,7 +188,7 @@ class RelayServer:
                 logger.warning(f"sender {sender.peer_id[:12]} timed out , oh oh did not receive payload")
 
     async def _pipe(self, a: RelayConnection, b: RelayConnection) -> None:
-        async def forward(src: RelayConnection, dst: RelayConnection, close_dst: bool) -> None:
+        async def forward(src: RelayConnection, dst: RelayConnection) -> None:
             try:
                 while src.alive and dst.alive:
                     frame = await src.receive_raw()
@@ -178,9 +198,10 @@ class RelayServer:
             except Exception as e:
                 logger.error(f"pipe error {src.peer_id[:12]} > {dst.peer_id[:12]}, error {e}")
             finally:
-                if close_dst:
-                    dst.close()
-        await asyncio.gather(forward(a, b, close_dst=False), forward(b, a, close_dst=True), return_exceptions=True)
+                dst.close()
+                src.close()
+                
+        await asyncio.gather(forward(a, b), forward(b, a), return_exceptions=True)
         logger.info(f"pipe closed {a.peer_id[:12]} | {b.peer_id[:12]}")
 
     def _store_payload(self, peer_id: str, payload: bytes) -> None:

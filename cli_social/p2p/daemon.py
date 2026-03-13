@@ -100,19 +100,30 @@ class Daemon:
                 
                 if msg_type == "incoming":
                     from_peer_id = msg.get("from", "unknown")
-                    logger.info(f"incoming relay conn from {from_peer_id[:12]}")
-                    await write_frame(writer, json.dumps({"type": "accept"}).encode())
+                    session_id = msg.get("session_id", "")
+                    logger.info(f"incoming relay conn from {from_peer_id[:12]}, session {session_id[:8]}")
                     
                     try:
-                        session = await accept(reader=reader, writer=writer, our_peer_id=self.peer_id, our_private_key=self.private_key, remote_peer_id=from_peer_id)
-                        async def _msg_handler(peer_id: str, content: str, message_id: int, _session: NoiseSession = session) -> None:
+                        pipe_reader, pipe_writer = await asyncio.open_connection(self.relay_host, self.relay_port)
+                        await write_frame(writer, json.dumps({"type": "pipe", "session_id": session_id}).encode())
+                        ack = json.loads(await read_frame(pipe_reader))
+                        if ack.get("type") != "ok":
+                            logger.error(f"pipe conn rejected {ack.get('reason')}")
+                            pipe_writer.close()
+                            continue
+                        
+                        session = await accept(reader=pipe_reader, writer=pipe_writer, our_peer_id=self.peer_id, our_private_key=self.private_key, remote_peer_id=from_peer_id)
+                        
+                        async def _msg_handler(peer_id: str, content: str, message_id: int, _session = session) -> None:
                             await self._on_message(peer_id, content, _session)
+                        
                         task = asyncio.create_task(session.listen(_msg_handler, on_receipt=None), name=f"relay_session_{from_peer_id[:12]}")
                         self._relay_session_tasks.add(task)
                         task.add_done_callback(self._relay_session_tasks.discard)
                     
                     except Exception as e:
-                        logger.error(f"relay handshake failed with {from_peer_id[:12]}, err = {e}")
+                        logger.error(f"failed to open pipe for {session_id[:8]}, err = {e}")
+                        
                 elif msg_type == "ping":
                     logger.debug("relay keepalive ping")
                 elif msg_type == "error":
