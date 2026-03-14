@@ -14,8 +14,7 @@ logger = logging.getLogger(__name__)
 
 MessageHandler = Callable[[str, str, int], Awaitable[None]]
 ReceiptHandler = Callable[[int], Awaitable[None]]
-REL_HOST = "64.227.164.21" # I will keep it hardcoded for now :)
-REL_PORT = 9100
+
 
 def generate_noise_keypair() -> tuple[bytes, bytes]:
     keypair = DH.ED25519().generate_keypair()
@@ -151,7 +150,7 @@ async def connect(
         via_relay=False,
     )
     
-async def connect_via_relay(our_peer_id: str, our_private_key: bytes, their_peer_id: str, relay_host: str = REL_HOST, relay_port: int = REL_PORT) -> NoiseSession:
+async def connect_via_relay(our_peer_id: str, our_private_key: bytes, their_peer_id: str, relay_host: str, relay_port: int) -> NoiseSession:
     logger.info(f"connecting via relay to {their_peer_id[:12]}")
     
     reader, writer = await asyncio.open_connection(relay_host, relay_port)

@@ -9,7 +9,7 @@ from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, L
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
 from cli_social.storage import Storage, DEFAULT_DB_PATH
-from cli_social.p2p.transport import connect, connect_via_relay
+from cli_social.p2p.transport import connect_via_relay
 from cli_social.p2p.daemon import Daemon
 
 logger = logging.getLogger(__name__)
@@ -221,11 +221,6 @@ class ChatModal(Vertical):
         await self.app.start_conversation(peer_id)  # type: ignore
         self.remove()
 
-
-class PeerNotFoundError(Exception):
-    pass
-
-
 class CLISocialApp(App):
     TITLE = "cli-social"
     SUB_TITLE = "decentralized encrypted messaging"
@@ -263,6 +258,7 @@ class CLISocialApp(App):
         self._daemon: Daemon | None = None
         self._daemon_task: asyncio.Task | None = None
         self._reannounce_task: asyncio.Task | None = None
+        self._presence_task: asyncio.Task | None = None
         self.relay_host = relay_host
         self.relay_port = relay_port
 
@@ -297,6 +293,7 @@ class CLISocialApp(App):
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
             if self._daemon._dht:
                 self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, listen_port=self.listen_port, host="127.0.0.1"), name="dht_reannounce")
+                self._presence_task = asyncio.create_task(self._presence_refresh(), name="presence_refresh")
             self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
         except Exception as e:
             self.notify(f"Daemon failed to start: {e}", severity="error", timeout=8)
@@ -338,6 +335,10 @@ class CLISocialApp(App):
         async with await Storage.open(self.db_path) as s:
             convo_id = await s.get_or_create_conversation(item.peer_id)
             await s.mark_read(convo_id)
+        
+        if self._daemon and self._daemon._dht:
+            online = await self._daemon._dht.is_online(item.peer_id)
+            chat.set_status("ok" if online else "error")
         self.set_focus(self.query_one("#message-input"))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -361,15 +362,9 @@ class CLISocialApp(App):
 
         try:
             session = None
-            try:
-                session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id)
-                logger.debug(f"relay connection to {peer_id[:12]} worked")
-            except Exception:
-                logger.info(f"relay failed :(, falling back to direct for {peer_id[:12]}")
-                host, port = await self._lookup_peer(peer_id)
-        
-                session = await asyncio.wait_for(connect(host=host, port=port, our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id), timeout=3)
-                logger.debug(f"direct connection to {peer_id[:12]} worked")
+            assert self.relay_host
+            session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id, relay_host=self.relay_host, relay_port=self.relay_port)
+            logger.debug(f"relay connection to {peer_id[:12]} worked")
             await session.send(content)
 
             now = datetime.now(timezone.utc).isoformat()
@@ -383,63 +378,16 @@ class CLISocialApp(App):
             await chat.append_message(content, "you", now, is_outgoing=True, message_id=message_id)
             chat.set_status("ok")
             
-            # todo later , remove this condition , because we will have no direct connections later, all will go through relay nodes 
-            
-            if session._via_relay:
-                async with await Storage.open(self.db_path) as s:
-                    await s.mark_delivered(message_id)
-                for b in self.query(MessageBubble):
-                            if b.message_id == message_id:
-                                b.mark_delivered()
-                                break
-                session.close()
-            else:
-                async def _wait_for_receipt() -> None:
-                    async def on_receipt(recv_message_id: int) -> None:
-                        if recv_message_id == message_id:
-                            async with await Storage.open(self.db_path) as s:
-                                await s.mark_delivered(message_id)
-                            for b in self.query(MessageBubble):
-                                if b.message_id == message_id:
-                                    b.mark_delivered()
-                                    break
-
-                    await session.listen(
-                        on_message=lambda p, c, mid: asyncio.sleep(0),
-                        on_receipt=on_receipt
-                    )
-                    session.close()
-                asyncio.create_task(_wait_for_receipt(), name=f"receipt; {message_id}")
-
-        except PeerNotFoundError:
-            self.notify("Peer not found in DHT! are they online?", severity="error")
-            chat.set_status("error")
+            async with await Storage.open(self.db_path) as s:
+                await s.mark_delivered(message_id)
+            for b in self.query(MessageBubble):
+                if b.message_id == message_id:
+                    b.mark_delivered()
+                    break
+            session.close()
         except Exception as e:
-            self.notify(f"Failed to send: {e}", severity="error")
+            self.notify(f"Failed to send, {e}", severity="error")
             chat.set_status("error")
-
-    async def _lookup_peer(self, peer_id: str) -> tuple[str, int]:
-        async with await Storage.open(self.db_path) as s:
-            contact = await s.get_contact(peer_id)
-            logger.debug(f"contact lookup for {peer_id[:12]}: {contact}")
-            if contact and contact.get("host") and contact.get("port"):
-                logger.debug(f"using direct address {contact['host']:{contact['port']}}")
-                return contact["host"], int(contact["port"])
-            else:
-                logger.debug(f"contact found but missing host/port, ")
-            
-        if self._daemon and self._daemon._dht:
-            for attempt in range(3):
-                try:
-                    info = await self._daemon._dht.lookup(peer_id)
-                    if info:
-                        return info.host, info.port
-                except Exception:
-                    pass
-                if attempt < 2:
-                    await asyncio.sleep(1)
-                
-        raise PeerNotFoundError(f"No DHT entry for {peer_id[:16]}, confirm their peer id?")
 
     async def handle_incoming(self, peer_id: str, content: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -455,11 +403,25 @@ class CLISocialApp(App):
             self.notify(f"New message from {peer_id[:12]}....")
         await self._load_conversations()
 
+    async def _presence_refresh(self) -> None:
+        while True:
+            await asyncio.sleep(10)
+            try:
+                chat = self.query_one(ChatPane)
+                if chat.current_peer_id and self._daemon and self._daemon._dht:
+                    online = await self._daemon._dht.is_online(chat.current_peer_id)
+                    chat.set_status("ok" if online else "error")
+            except Exception:
+                pass
+            
+
     def action_quit(self) -> None:
         if self._daemon_task:
             self._daemon_task.cancel()
         if self._reannounce_task:
             self._reannounce_task.cancel()
+        if self._presence_task:
+            self._presence_task.cancel()
         self.exit()
 
     def action_new_chat(self) -> None:

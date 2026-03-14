@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional
 from kademlia.network import Server
@@ -9,9 +10,7 @@ from kademlia.network import Server
 logger = logging.getLogger(__name__)
 
 DEFAULT_DHT_PORT = 6969
-BOOTSTRAP_NODES: list[tuple[str, int]] = [
-    # will keep this as it is for now , need to set a reminder for this ahh
-]
+
 
 @dataclass
 class PeerInfo:
@@ -19,13 +18,15 @@ class PeerInfo:
     host: str
     port: int
     username: str = ""
+    last_seen: str = ""
     
     def to_json(self) -> str:
         return json.dumps({
             "peer_id": self.peer_id,
             "host": self.host,
             "port": self.port,
-            "username": self.username
+            "username": self.username,
+            "last_seen": self.last_seen
         })
     @classmethod
     def from_json(cls, data:str) -> "PeerInfo":
@@ -34,7 +35,8 @@ class PeerInfo:
             peer_id=d["peer_id"],
             host=d["host"],
             port=d["port"],
-            username=d.get("username", "")   
+            username=d.get("username", ""),
+            last_seen=d.get("last_seen", "")   
         )
 
 class DHTNode:
@@ -43,12 +45,12 @@ class DHTNode:
         peer_id: str,
         host: str = "0.0.0.0",
         port: int = DEFAULT_DHT_PORT,
-        bootstrap_nodes: list[tuple[str, int]] = BOOTSTRAP_NODES,
+        bootstrap_nodes: list[tuple[str, int]] | None = None
     ):
         self.peer_id = peer_id
         self.host = host
         self.port = port
-        self.bootstrap_nodes = bootstrap_nodes
+        self.bootstrap_nodes = bootstrap_nodes or []
         self._server = Server()
         self._started = False
     
@@ -80,7 +82,8 @@ class DHTNode:
             peer_id=self.peer_id,
             host=host,
             port=listen_port,
-            username=username
+            username=username,
+            last_seen=datetime.now(timezone.utc).isoformat()
         )
         await self._server.set(self.peer_id, info.to_json())
         logger.info(f"Announced self to DHT {self.peer_id[:12]}")
@@ -96,6 +99,13 @@ class DHTNode:
             logger.error(f"parsing failed for peer info {peer_id[:12]} {e}")
             return None
 
+    async def is_online(self, peer_id: str, threshold_seconds: int = 45) -> bool:
+        info = await self.lookup(peer_id)
+        if not info or not info.last_seen:
+            return False
+        last_seen = datetime.fromisoformat(info.last_seen)
+        age = (datetime.now(timezone.utc) - last_seen).total_seconds()
+        return age < threshold_seconds
         
     async def __aenter__(self):
         await self.start()
