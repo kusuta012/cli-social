@@ -135,7 +135,7 @@ class Daemon:
                     logger.debug("relay keepalive ping")
                     await write_frame(writer, json.dumps({"type": "pong"}).encode())
                 elif msg_type == "error":
-                    logger.warning(f"relay error {msg.get("reason")}")
+                    logger.warning(f"relay error {msg.get('reason')}")
                     
                                     
         except asyncio.IncompleteReadError:
