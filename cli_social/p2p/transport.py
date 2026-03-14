@@ -4,7 +4,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timezone
-from typing import Callable, Awaitable, Tuple, cast
+from typing import Callable, Awaitable
 from noise.connection import NoiseConnection, Keypair
 from noise.backends.default import diffie_hellmans as DH
 from cli_social.p2p.utils import read_frame, write_frame
@@ -21,14 +21,12 @@ def generate_noise_keypair() -> tuple[bytes, bytes]:
     keypair = DH.ED25519().generate_keypair()
     return keypair.public_bytes, keypair.private.private_bytes_raw()
 
-def _extract_remote_static(noise: NoiseConnection) -> bytes:
-    return noise.get_handshake_hash()
     
 async def _do_handshake_initiator(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     our_private: bytes,
-) -> Tuple[NoiseConnection, bytes]:
+) -> NoiseConnection:
     noise = NoiseConnection.from_name(b"Noise_XX_25519_ChaChaPoly_SHA256")
     noise.set_as_initiator()
     noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private)
@@ -44,15 +42,14 @@ async def _do_handshake_initiator(
     await write_frame(writer, bytes(msg3))
     
     assert noise.handshake_finished, "Hanshake did not finish :("
-    remote_static = _extract_remote_static(noise)
     logger.debug("Noise handshake finished (init)")
-    return noise, remote_static
+    return noise
 
 async def _do_handshake_responder(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     our_private: bytes
-) -> Tuple[NoiseConnection, bytes]:
+) -> NoiseConnection:
     
     noise = NoiseConnection.from_name(b"Noise_XX_25519_ChaChaPoly_SHA256")
     noise.set_as_responder()
@@ -69,9 +66,8 @@ async def _do_handshake_responder(
     noise.read_message(msg3)
     
     assert noise.handshake_finished, "Hanshake did not finish :("
-    remote_static = _extract_remote_static(noise)
     logger.debug("Noise handshake finished (resp)")
-    return noise, remote_static
+    return noise
 
 class NoiseSession:
     def __init__(
@@ -81,7 +77,6 @@ class NoiseSession:
         writer: asyncio.StreamWriter,
         our_peer_id: str,
         remote_peer_id: str,
-        remote_static_key: bytes = b"",
         via_relay: bool = False
         
     ):
@@ -91,7 +86,6 @@ class NoiseSession:
         self.our_peer_id = our_peer_id
         self.remote_peer_id = remote_peer_id
         self._via_relay = via_relay
-        self.remote_static_key = remote_static_key
         
     async def send(self, content: str) -> None:
         payload = json.dumps({
@@ -146,7 +140,7 @@ async def connect(
 ) -> NoiseSession:
     logger.info(f"Connecting to {their_peer_id[:12]} at {host}:{port}")
     reader, writer = await asyncio.open_connection(host, port)
-    noise, remote_static_key = await _do_handshake_initiator(reader, writer, our_private_key)
+    noise = await _do_handshake_initiator(reader, writer, our_private_key)
     
     return NoiseSession(
         noise=noise,
@@ -155,7 +149,6 @@ async def connect(
         our_peer_id=our_peer_id,
         remote_peer_id=their_peer_id,
         via_relay=False,
-        remote_static_key=remote_static_key
     )
     
 async def connect_via_relay(our_peer_id: str, our_private_key: bytes, their_peer_id: str, relay_host: str = REL_HOST, relay_port: int = REL_PORT) -> NoiseSession:
@@ -176,8 +169,8 @@ async def connect_via_relay(our_peer_id: str, our_private_key: bytes, their_peer
     resp = json.loads(await read_frame(reader))
     if resp.get("type") == "ok":
         logger.info(f"relay pipe working to {their_peer_id[:12]}, now noise handhskae")
-        noise, remote_static_key = await _do_handshake_initiator(reader, writer, our_private_key)
-        return NoiseSession(noise=noise, reader=reader, writer=writer, our_peer_id=our_peer_id, remote_peer_id=their_peer_id, via_relay=True, remote_static_key=remote_static_key)
+        noise = await _do_handshake_initiator(reader, writer, our_private_key)
+        return NoiseSession(noise=noise, reader=reader, writer=writer, our_peer_id=our_peer_id, remote_peer_id=their_peer_id, via_relay=True)
     
     elif resp.get("type") == "stored":
         # todo
@@ -196,7 +189,7 @@ async def accept(
     remote_peer_id: str = "unknown"
 ) -> NoiseSession:
     
-    noise, remote_static_key = await _do_handshake_responder(reader, writer, our_private_key)
+    noise = await _do_handshake_responder(reader, writer, our_private_key)
     
     return NoiseSession(
         noise=noise,
@@ -205,5 +198,4 @@ async def accept(
         our_peer_id=our_peer_id,
         remote_peer_id=remote_peer_id,
         via_relay=False,
-        remote_static_key=remote_static_key
     )
