@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "timestamp": 1773510859,
+  "relays": [
+    {
+      "id": "relay-1",
+      "address": "tcp://64.227.164.21:19853",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "speedhawks",
+        "region": "global"
+      }
+    }
+  ],
+  "signatures": {
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "7de7e55731c25e3ce1da56df156145531f5a3559b31ad6da6498286dbbad565804fb29ff218ca96261558e11e7e225307fd926f945b3b65834c8a2493c1eae03"
+  }
+}

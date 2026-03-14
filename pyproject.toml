@@ -29,6 +29,6 @@ dev = [
 [project.scripts]
 sxcl = "cli_social.cmds.cli:main"
 
-[tools.setuptools.packages.find]
+[tool.setuptools.packages.find]
 where = ["."]
 include = ["cli_social*"]

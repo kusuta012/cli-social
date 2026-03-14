@@ -106,6 +106,12 @@ class DHTNode:
         last_seen = datetime.fromisoformat(info.last_seen)
         age = (datetime.now(timezone.utc) - last_seen).total_seconds()
         return age < threshold_seconds
+    
+    async def get_value(self, key: str) -> str | None:
+        return await self._server.get(key)
+    
+    async def set_value(self, key: str, value: str) -> None:
+        await self._server.set(key, value)
         
     async def __aenter__(self):
         await self.start()

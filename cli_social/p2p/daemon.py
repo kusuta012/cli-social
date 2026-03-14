@@ -2,11 +2,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from typing import Callable, Awaitable
 from cli_social.p2p.transport import accept, NoiseSession
 from cli_social.p2p.dht import DHTNode
 from cli_social.storage import Storage, DEFAULT_DB_PATH
 from cli_social.p2p.utils import read_frame, write_frame
+from cli_social.p2p.registry import fetch_and_vrfy_registry
 from pathlib import Path
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,8 @@ class Daemon:
         
         if self.relay_host:
             await self._connect_to_relay()
+        else:
+            await self._discover_and_connect_relay()
     
     # Idk how but on every night coding session I end up in this file
 
@@ -214,3 +218,39 @@ class Daemon:
             
         if self.on_message:
             await self.on_message(peer_id, content)
+    
+    async def _discover_and_connect_relay(self) -> None:
+        
+        if self._dht is None:
+            logger.error("blah blah")
+            return
+        
+        pointer = await self._dht.get_value("relays.v1")
+        
+        if not pointer:
+            logger.warning("No relays.v1 pointer in DHT, back to hardcoded ahh")
+            pointer = "https://raw.githubusercontent.com/kusuta012/cli-social/main/registry.signed.json"
+            
+        try:
+            relays = await fetch_and_vrfy_registry(pointer, accept_community=True)
+            if not relays:
+                logger.error("No relays found in the verified registry")
+                return
+            
+            tcp_relays = [r for r in relays if r.get("address", "").startswith("tcp://")]
+            if not tcp_relays:
+                logger.error("No valid relays found")
+                return
+            
+            chosen = random.choice(tcp_relays) # todo: keeping it random for now , but needs to be efficient relay routes
+            addr = chosen["address"].replace("tcp://", "")
+            host, port = addr.split(":")
+            
+            self.relay_host = host
+            self.relay_port = int(port)
+            logger.info(f"Chose relay from registry {self.relay_host}:{self.relay_port}")
+            
+            await self._connect_to_relay()
+            
+        except Exception as e:
+            logger.error(f"relay sequence failed {e}")

@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 STORE_MAX_MESSAGES = 100
 PIPE_TIMEOUT = 60
+MAX_CONCURRENT_CONN = 500
+# MAX_PIPES_PER_PEER = 5
 
 
 async def _write_msg(writer: asyncio.StreamWriter, msg: dict) -> None:
@@ -84,6 +86,12 @@ class RelayServer:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer_addr = writer.get_extra_info("peername")
+        
+        if len(self._online) >= MAX_CONCURRENT_CONN:
+            logger.warning(f"relay at capacity!, dropping conn from {peer_addr}")
+            writer.close()
+            return
+            
         conn: RelayConnection | None = None
         logger.info(f"new conn from {peer_addr}")
 

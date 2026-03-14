@@ -9,11 +9,19 @@ from cli_social.identity import (
     DEFAULT_KEY_FILE,
     _key_file_for
 )
+import json
 from cli_social.storage import Storage, db_path_for
 from cli_social.p2p.daemon import Daemon
 from cli_social.p2p.transport import connect
 from cli_social.p2p.dht import DHTNode
-# from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
+from cli_social.p2p.relay import RelayServer
+from cli_social.identity import sign_registry_doc
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+DEFAULT_BOOTSTRAP_NODES = [
+    ("64.225.108.241", 52342)
+]
 
 
 DATA_DIR_OPTION = click.option(
@@ -24,7 +32,7 @@ DATA_DIR_OPTION = click.option(
     envvar="SXCL_DATA_DIR"
 )
 
-def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str]:
+def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str, Ed25519PublicKey]:
     key_file = _key_file_for(data_dir)
     if not identity_exists(key_file):
         click.echo("No identity found. Run `sxcl init` first.")
@@ -33,8 +41,8 @@ def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str]:
     passphrase = click.prompt("Passphrase", hide_input=True)
     
     try:
-        _, _, peer_id, username, noise_private_bytes = load_identity(passphrase, key_file)
-        return peer_id, noise_private_bytes, username
+        private_key,public_key, peer_id, username, noise_private_bytes = load_identity(passphrase, key_file)
+        return peer_id, noise_private_bytes, username, public_key
     except ValueError:
         click.echo("Wrong passphrase! you forgot your password?? dumbahh")
         raise SystemExit(1)
@@ -42,6 +50,32 @@ def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str]:
 @click.group()
 def main():
     pass
+
+@main.group()
+def registry():
+    pass
+
+@registry.command()
+@click.argument("input_file", type=click.File('r'))
+@click.argument("output_file", type=click.File('w'))
+@DATA_DIR_OPTION
+def sign(input_file, output_file, data_dir):
+    key_file = _key_file_for(data_dir)
+    if not identity_exists(key_file):
+        click.echo("No identity found. Run `sxcl init` first.")
+        raise SystemExit(1)
+    
+    passphrase = click.prompt("Enter passphrase for signing key", hide_input=True)
+    try:
+        private_key, _, _, _, _ = load_identity(passphrase, key_file)
+    except ValueError:
+        click.echo("Wrong passphrase! you forgot your password?? dumbahh")
+        raise SystemExit(1)
+    
+    registry_data = json.load(input_file)
+    signed_registry = sign_registry_doc(private_key, registry_data)
+    json.dump(signed_registry, output_file, indent=2)
+    click.echo(f"signed registry wrote it to {output_file.name}")
 
 @main.command()
 @DATA_DIR_OPTION
@@ -79,9 +113,11 @@ def init(data_dir):
 @main.command()
 @DATA_DIR_OPTION
 def whoami(data_dir):
-    peer_id, _, username = _require_identity(data_dir)
+    peer_id, _, username, public_key = _require_identity(data_dir)
+    pub_key_hex = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     click.echo(f"   Username : {username or '(none)'}")
     click.echo(f"   Peer ID  : {peer_id}")
+    click.echo(f"   Pub Key  : {pub_key_hex}")
 
 @main.command()
 @DATA_DIR_OPTION
@@ -118,13 +154,16 @@ def tui(port , dht_port, bootstrap, relay, data_dir):
     )
     
     from cli_social.tui import run
-    peer_id, private_key, username = _require_identity(data_dir)    
+    peer_id, private_key, username, _, = _require_identity(data_dir)    
     
     bootstrap_nodes = []
-    for node in bootstrap:
-        h, p = node.rsplit(":", 1)
-        bootstrap_nodes.append((h, int(p)))
-    
+    if bootstrap:
+        for node in bootstrap:
+            h, p = node.rsplit(":", 1)
+            bootstrap_nodes.append((h, int(p)))
+    else:
+        bootstrap_nodes = DEFAULT_BOOTSTRAP_NODES
+        
     relay_host, relay_port = None, 9100
     if relay:
         rh, rp = relay.rsplit(":", 1)
@@ -138,12 +177,15 @@ def tui(port , dht_port, bootstrap, relay, data_dir):
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="Bootstrap nodes as host:port")
 def daemon(port, dht_port, bootstrap, data_dir):
-    peer_id, private_key, username = _require_identity(data_dir)
+    peer_id, private_key, username, _ = _require_identity(data_dir)
     
     bootstrap_nodes = []
-    for node in bootstrap:
-        host, p = node.rsplit(":", 1)
-        bootstrap_nodes.append((host, int(p)))
+    if bootstrap:
+        for node in bootstrap:
+            h, p = node.rsplit(":", 1)
+            bootstrap_nodes.append((h, int(p)))
+    else:
+        bootstrap_nodes = DEFAULT_BOOTSTRAP_NODES
         
     async def _run():
         d = Daemon(
@@ -197,7 +239,7 @@ def add(peer_id, username, public_key, host, port, data_dir):
 @click.option("--host", default=None, help="Direct host (to skip the dht lookup)")
 @click.option("--port", default=9000, help="Remote peer root")
 def send(peer_id, message, host, port, data_dir):
-    our_peer_id, private_key, _ = _require_identity(data_dir)
+    our_peer_id, private_key, _, _ = _require_identity(data_dir)
     
     async def _send():
         target_host = host
@@ -236,3 +278,44 @@ def send(peer_id, message, host, port, data_dir):
         session.close()
         click.echo(f"Message sent")
     asyncio.run(_send())
+    
+@main.command()
+@click.option("--host", default="0.0.0.0", help="the host to lsiten on")
+@click.option("--relay-port", default=19853, help="tcp port for relay server")
+@click.option("--dht-port", default=6969, help="UDP port for the dht node")
+@click.option("--relay", is_flag=True, help="run as a message relay node")
+@click.option("--bootstrap", is_flag=True, help="run as dht bootstrap node")
+@click.option("--store", is_flag=True, help="run as store-fwd mode") # do not use rn
+def node(host, relay_port, dht_port, relay, bootstrap, store):
+    if not (relay or bootstrap or store):
+        click.echo("You must specify role (--relay, --boostrap, --store)")
+        return
+    
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    
+    async def _run_node():
+        tasks = []
+        if bootstrap:
+            dht = DHTNode(peer_id="bootstrap_node", host=host, port=dht_port, bootstrap_nodes=[])
+            tasks.append(dht.start())
+            click.echo(f"DHT bootstrap node listening on UDP {host}:{dht_port}")
+            
+        if relay or store:
+            # is_store_node = store
+            relay_server = RelayServer(host=host, port=relay_port)
+            tasks.append(asyncio.create_task(relay_server.start()))
+            click.echo(f"Relay node listening on TCP {host}:{relay_port}")
+        
+        # if this crashes
+        if tasks:
+            await asyncio.gather(*tasks)
+            await asyncio.Future()
+        else:
+            click.echo("No tasks to run")
+    
+    try:
+        asyncio.run(_run_node())
+    except KeyboardInterrupt:
+        click.echo("\nShutting down node!") 
+                   

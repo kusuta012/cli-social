@@ -132,3 +132,11 @@ def load_identity(
 
 def identity_exists(key_file: Path = DEFAULT_KEY_FILE) -> bool:
     return key_file.exists()
+
+def sign_registry_doc(private_key: Ed25519PrivateKey, registry_data: dict) -> dict:
+    payload = {k: v for k, v in registry_data.items() if k != "signatures"}
+    message = json.dumps(payload, sort_keys=True).encode('utf-8')
+    signature = private_key.sign(message)
+    pub_hex = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+    registry_data["signatures"] = { pub_hex: signature.hex() }
+    return registry_data

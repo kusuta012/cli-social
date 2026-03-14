@@ -361,12 +361,18 @@ class CLISocialApp(App):
         chat.set_status("connecting")
 
         try:
-            session = None
-            assert self.relay_host
-            session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id, relay_host=self.relay_host, relay_port=self.relay_port)
-            logger.debug(f"relay connection to {peer_id[:12]} worked")
+            active_relay_host = self._daemon.relay_host if self._daemon else self.relay_host
+            active_relay_port = self._daemon.relay_port if self._daemon else self.relay_port
+            
+            if not active_relay_host:
+                self.notify("still discovering relay network... pls wait", severity="warning")
+                chat.set_status("error")
+                return
+            
+            session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id, relay_host=active_relay_host, relay_port=active_relay_port)
+            logger.debug(f"relay connection to {peer_id[:12]} worked via {self.relay_host}:{self.relay_port}")
             await session.send(content)
-
+            
             now = datetime.now(timezone.utc).isoformat()
             async with await Storage.open(self.db_path) as s:
                 message_id = await s.save_message(
