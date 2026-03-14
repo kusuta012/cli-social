@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "timestamp": 1773510859,
+  "timestamp": 1773513649,
   "relays": [
     {
       "id": "relay-1",
@@ -12,9 +12,20 @@
         "operator": "speedhawks",
         "region": "global"
       }
+    },
+    {
+      "id": "relay-2",
+      "address": "tcp://40.233.121.197:49515",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "thirtyseven",
+        "region": "global"
+      }
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "7de7e55731c25e3ce1da56df156145531f5a3559b31ad6da6498286dbbad565804fb29ff218ca96261558e11e7e225307fd926f945b3b65834c8a2493c1eae03"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "a98d7993366a03b1398088256ac025f3950ae92b11f9f425c337e77864113a1fc6def9f415d538513ddefd0363c91c5da5afda579e6a37503b2cec0128083207"
   }
 }

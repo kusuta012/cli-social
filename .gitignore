@@ -13,4 +13,5 @@ venv/
 env/
 pip-log.txt
 pip-delete-this-directory.txt
-Thumbs.db
+registry.template.json
+Dockerfile
