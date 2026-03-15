@@ -3,13 +3,19 @@ import asyncio
 import json
 import logging
 import random
+import uuid
+from collections import deque
+from pathlib import Path
 from typing import Callable, Awaitable
 from cli_social.p2p.transport import accept, NoiseSession
 from cli_social.p2p.dht import DHTNode
 from cli_social.storage import Storage, DEFAULT_DB_PATH
 from cli_social.p2p.utils import read_frame, write_frame
 from cli_social.p2p.registry import fetch_and_vrfy_registry
-from pathlib import Path
+from cli_social.p2p.transport import decrypt_offline_message
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,9 +54,14 @@ class Daemon:
         self._relay_writer: asyncio.StreamWriter | None = None
         self._relay_task: asyncio.Task | None = None
         self._relay_session_tasks: set[asyncio.Task] = set()
+        self._recent_message_ids = deque(maxlen=200)
+        self.noise_pubkey_hex = ""
 
     # coding this at 1am , I need caffeine !!
     async def start(self) -> None:
+        noise_priv_key = X25519PrivateKey.from_private_bytes(self.private_key)
+        self.noise_pubkey_hex = noise_priv_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+        
         self._storage = await Storage.open(self.db_path or DEFAULT_DB_PATH)
         self._dht = DHTNode(
             peer_id=self.peer_id,
@@ -61,7 +72,8 @@ class Daemon:
         await self._dht.announce(
             username=self.username,
             listen_port=self.listen_port,
-            host="127.0.0.1"
+            host="127.0.0.1",
+            noise_pubkey_hex=self.noise_pubkey_hex
         )
         
         self._server = await asyncio.start_server(
@@ -130,6 +142,16 @@ class Daemon:
                     
                     except Exception as e:
                         logger.error(f"failed to open pipe for {session_id[:8]}, err = {e}")
+                
+                elif msg_type == "stored_message":
+                    logger.info("Received a stored msg from relay")
+                    try:
+                        payload_bytes = bytes.fromhex(msg["payload"])
+                        decrypted_msg = await decrypt_offline_message(self.private_key, payload_bytes)
+                        sender_peer_id = decrypted_msg.get("from_peer_id", "unknown-offline-sender")
+                        await self._on_message(sender_peer_id, decrypted_msg["content"], None, decrypted_msg.get("client_message_id"))
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt stored message {e}") 
                         
                 elif msg_type == "ping":
                     logger.debug("relay keepalive ping")
@@ -200,7 +222,13 @@ class Daemon:
         finally:
             writer.close()
             
-    async def _on_message(self, peer_id: str, content: str, session: NoiseSession) -> None:
+    async def _on_message(self, peer_id: str, content: str, session: NoiseSession | None, client_message_id: str | None = None) -> None:
+        if client_message_id:
+            if client_message_id in self._recent_message_ids:
+                logger.debug(f"Duplicate msg {client_message_id[:8]} from {peer_id[:8]} dropped")
+                return
+            self._recent_message_ids.append(client_message_id)
+            
         message_id = -1
         if self._storage:
             message_id = await self._storage.save_message(
@@ -210,11 +238,12 @@ class Daemon:
                 is_outgoing=False
             )
         
-        try:
-            await session.send_receipt(message_id)
-            logger.debug(f"sent receipt {message_id} to {peer_id[:12]}")
-        except Exception as e:
-            logger.warning(f"failed to send receipt: {e}")
+        if session:
+            try:
+                await session.send_receipt(message_id)
+                logger.debug(f"sent receipt {message_id} to {peer_id[:12]}")
+            except Exception as e:
+                logger.warning(f"failed to send receipt: {e}")
             
         if self.on_message:
             await self.on_message(peer_id, content)

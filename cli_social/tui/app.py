@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
@@ -9,8 +10,9 @@ from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, L
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
 from cli_social.storage import Storage, DEFAULT_DB_PATH
-from cli_social.p2p.transport import connect_via_relay
+from cli_social.p2p.transport import connect_via_relay, PeerOfflineError, encrypt_for_offline
 from cli_social.p2p.daemon import Daemon
+from cli_social.p2p.utils import write_frame
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +273,7 @@ class CLISocialApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.query_one(Header).sub_title = f"Peer ID: {self.peer_id[:16]}"
         await self._start_daemon()
         await self._load_conversations()
         self.set_focus(self.query_one("#conversation-list"))
@@ -315,7 +318,6 @@ class CLISocialApp(App):
         async with await Storage.open(self.db_path) as s:
             await s.get_or_create_conversation(peer_id)
         await self._load_conversations()
-
     async def on_existing_conversation(self, peer_id: str) -> None:
         lv = self.query_one("#conversation-list", ListView)
         items = list(lv.query(ConversationItem))
@@ -359,41 +361,82 @@ class CLISocialApp(App):
     async def _send_message(self, peer_id: str, content: str) -> None:
         chat = self.query_one(ChatPane)
         chat.set_status("connecting")
-
-        try:
-            active_relay_host = self._daemon.relay_host if self._daemon else self.relay_host
-            active_relay_port = self._daemon.relay_port if self._daemon else self.relay_port
+        
+        MAX_RETRIES = 3
+        RETRY_DELAY = 2
+        
+        client_message_id = str(uuid.uuid4())
+        session = None
+        delivered = False
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                assert self._daemon, "Daemon is not running"
+                active_relay_host = self._daemon.relay_host
+                active_relay_port = self._daemon.relay_port
             
-            if not active_relay_host:
-                self.notify("still discovering relay network... pls wait", severity="warning")
+                if not active_relay_host:
+                    self.notify("still discovering relay network... pls wait", severity="warning")
+                    chat.set_status("error")
+                    return
+            
+                session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id, relay_host=active_relay_host, relay_port=active_relay_port)
+                logger.debug(f"relay connection to {peer_id[:12]} worked via {active_relay_host}:{active_relay_port}")
+                await session.send(content, client_message_id)
+                chat.set_status("ok")
+                delivered = True
+                break
+            
+            except PeerOfflineError as e:
+                self.notify(f"Peer is offline, storing to forward later")
+                try:
+                    assert self._daemon._dht, "DHT not running"
+                    peer_info = await self._daemon._dht.lookup(peer_id)
+                    if not peer_info or not peer_info.noise_pubkey_hex:
+                        raise ValueError("could not find peer's public key in DHT for offline messaging")
+                    their_pubkey = bytes.fromhex(peer_info.noise_pubkey_hex)
+                    encrypt_blob = await encrypt_for_offline(self.peer_id, self.private_key, their_pubkey, content, client_message_id)
+                    await write_frame(e.writer, encrypt_blob)
+                    e.writer.close()
+                    
+                    self.notify("msg stored for later", severity="information")
+                    chat.set_status("ok")
+                    delivered = False
+                    break        
+                except Exception as store_err:
+                    self.notify(f"failed to store msg {store_err}", severity="error")
+                    chat.set_status("error")
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(RETRY_DELAY)
+                        continue
+                    return
+            
+            except Exception as e:
+                self.notify(f"failed to send (attempt {attempt + 1}/{MAX_RETRIES}, {e})", severity="warning")
                 chat.set_status("error")
-                return
-            
-            session = await connect_via_relay(our_peer_id=self.peer_id, our_private_key=self.private_key, their_peer_id=peer_id, relay_host=active_relay_host, relay_port=active_relay_port)
-            logger.debug(f"relay connection to {peer_id[:12]} worked via {self.relay_host}:{self.relay_port}")
-            await session.send(content)
-            
-            now = datetime.now(timezone.utc).isoformat()
-            async with await Storage.open(self.db_path) as s:
-                message_id = await s.save_message(
-                    peer_id=peer_id,
-                    sender_peer_id=self.peer_id,
-                    content=content,
-                    is_outgoing=True
-                )
-            await chat.append_message(content, "you", now, is_outgoing=True, message_id=message_id)
-            chat.set_status("ok")
-            
-            async with await Storage.open(self.db_path) as s:
-                await s.mark_delivered(message_id)
-            for b in self.query(MessageBubble):
-                if b.message_id == message_id:
-                    b.mark_delivered()
-                    break
-            session.close()
-        except Exception as e:
-            self.notify(f"Failed to send, {e}", severity="error")
-            chat.set_status("error")
+                if attempt < MAX_RETRIES -1:
+                    await asyncio.sleep(RETRY_DELAY)
+                    continue
+                else:
+                    self.notify(f"failed to send {MAX_RETRIES} attempts {e}", severity="error")
+                    return
+            finally:
+                if session:
+                    session.close()
+        
+        now = datetime.now(timezone.utc).isoformat()
+        async with await Storage.open(self.db_path) as s:
+            message_id = await s.save_message(
+                peer_id=peer_id,
+                sender_peer_id=self.peer_id,
+                content=content,
+                is_outgoing=True,
+                delivered=delivered
+            )
+        bub = await chat.append_message(content, "you", now, is_outgoing=True, message_id=message_id, delivered=delivered)
+        if delivered:
+            bub.mark_delivered()    
+
 
     async def handle_incoming(self, peer_id: str, content: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
