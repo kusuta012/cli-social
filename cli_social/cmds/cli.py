@@ -300,7 +300,7 @@ def node(host, relay_port, dht_port, relay, bootstrap, store):
     async def _run_node():
         tasks = []
         if bootstrap:
-            dht = DHTNode(peer_id="bootstrap_node", host=host, port=dht_port, bootstrap_nodes=[])
+            dht = DHTNode(peer_id="bootstrap_node", host=host, port=dht_port, bootstrap_nodes=DEFAULT_BOOTSTRAP_NODES)
             tasks.append(dht.start())
             click.echo(f"DHT bootstrap node listening on UDP {host}:{dht_port}")
             
