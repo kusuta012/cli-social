@@ -391,8 +391,8 @@ class CLISocialApp(App):
             except PeerOfflineError as e:
                 self.notify(f"Peer is offline, storing to forward later")
                 try:
-                    assert self._daemon._dht, "DHT not running"
-                    peer_info = await self._daemon._dht.lookup(peer_id)
+                    assert self._daemon._dht, "DHT not running" # type: ignore
+                    peer_info = await self._daemon._dht.lookup(peer_id) # type: ignore
                     if not peer_info or not peer_info.noise_pubkey_hex:
                         raise ValueError("could not find peer's public key in DHT for offline messaging")
                     their_pubkey = bytes.fromhex(peer_info.noise_pubkey_hex)

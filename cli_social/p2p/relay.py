@@ -241,7 +241,8 @@ class RelayServer:
         logger.debug(f"flushing {len(messages)} stored messages to {conn.peer_id[:12]}")
         for msg in messages:
             try:
-                await conn.send_raw(msg)
+                wrap = {"type": "stored_message", "payload": msg.hex()}
+                await conn.send_msg(wrap)
             except Exception as e:
                 logger.error(f"faiiled to flush {conn.peer_id[:12], {e}}")
                 self._store[conn.peer_id] = messages[messages.index(msg):]
