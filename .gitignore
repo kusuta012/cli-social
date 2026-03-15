@@ -17,3 +17,4 @@ registry.template.json
 Dockerfile
 operator.md
 relay.md
+docker-compose.yml

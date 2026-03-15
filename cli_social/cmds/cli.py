@@ -20,7 +20,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 DEFAULT_BOOTSTRAP_NODES = [
-    ("64.225.108.241", 52342)
+    ("64.225.108.241", 52342),
+    ("139.59.77.182", 51560),
+    ("45.55.209.227", 52585),
+    ("138.197.209.223", 51311)
 ]
 
 
