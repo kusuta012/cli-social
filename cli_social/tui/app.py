@@ -14,6 +14,7 @@ from cli_social.p2p.transport import connect_via_relay, PeerOfflineError, encryp
 from cli_social.p2p.daemon import Daemon
 from cli_social.p2p.utils import write_frame
 
+
 logger = logging.getLogger(__name__)
 
 class ConversationItem(ListItem):
@@ -273,7 +274,7 @@ class CLISocialApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self.query_one(Header).sub_title = f"Peer ID: {self.peer_id[:16]}"
+        # self.query_one(Header).title = f"Peer ID: {self.peer_id[:16]}" not sure about thsi
         await self._start_daemon()
         await self._load_conversations()
         self.set_focus(self.query_one("#conversation-list"))
@@ -295,7 +296,7 @@ class CLISocialApp(App):
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
             if self._daemon._dht:
-                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, listen_port=self.listen_port, host="127.0.0.1"), name="dht_reannounce")
+                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, listen_port=self.listen_port, host="127.0.0.1", noise_pubkey_hex=self._daemon.noise_pubkey_hex), name="dht_reannounce")
                 self._presence_task = asyncio.create_task(self._presence_refresh(), name="presence_refresh")
             self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
         except Exception as e:

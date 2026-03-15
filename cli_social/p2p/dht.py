@@ -72,7 +72,7 @@ class DHTNode:
     async def reannounce(self, username: str = "", listen_port: int = 9000, host: str = "127.0.0.1", noise_pubkey_hex: str = "") -> None:
         while self._started:
             await self.announce(username=username, listen_port=listen_port, host=host, noise_pubkey_hex=noise_pubkey_hex)
-            await asyncio.sleep(5)
+            await asyncio.sleep(60)
     
     async def stop(self) -> None:
         if self._started:
