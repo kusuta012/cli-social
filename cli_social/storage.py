@@ -155,15 +155,16 @@ class Storage:
         sender_peer_id: str,
         content: str,
         is_outgoing: bool = False,
+        delivered: bool = False
     ) -> int:
         conv_id = await self.get_or_create_conversation(peer_id)
         now = _now()
         cursor = await self._db.execute(
             """
-            INSERT INTO messages (conversation_id, sender_peer_id, content, sent_at, is_outgoing)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO messages (conversation_id, sender_peer_id, content, sent_at, is_outgoing, delivered)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (conv_id, sender_peer_id, content, now, int(is_outgoing)),
+            (conv_id, sender_peer_id, content, now, int(is_outgoing), int(delivered)),
         )
         
         if not is_outgoing:
