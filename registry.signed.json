@@ -23,9 +23,20 @@
         "operator": "thirtyseven",
         "region": "global"
       }
+    },
+    {
+      "id": "relay-3",
+      "address": "tcp://ip.kirze.de:8000",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "seradedstripes",
+        "region": "global"
+      }
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "a98d7993366a03b1398088256ac025f3950ae92b11f9f425c337e77864113a1fc6def9f415d538513ddefd0363c91c5da5afda579e6a37503b2cec0128083207"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "8bade1bb425c4a04fa466333159264f09eeeb51de4da74695231dff045a0f8dc1fa35631b124da66ca10dbeea860a24e2a99d41219b26b5bf79658bf0fe75901"
   }
 }
