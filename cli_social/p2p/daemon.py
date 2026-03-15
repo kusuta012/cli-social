@@ -148,7 +148,7 @@ class Daemon:
                     try:
                         payload_bytes = bytes.fromhex(msg["payload"])
                         decrypted_msg = await decrypt_offline_message(self.private_key, payload_bytes)
-                        sender_peer_id = decrypted_msg.get("from_peer_id", "unknown-offline-sender")
+                        sender_peer_id = decrypted_msg.get("peer_id", "unknown-offline-sender")
                         await self._on_message(sender_peer_id, decrypted_msg["content"], None, decrypted_msg.get("client_message_id"))
                         logger.info("successfully processed stored msg")
                     except Exception as e:
