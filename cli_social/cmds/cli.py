@@ -236,7 +236,7 @@ def add(peer_id, username, public_key, host, port, data_dir):
 @DATA_DIR_OPTION
 @click.argument("peer_id")
 @click.argument("message")
-@click.option("--host", default=None, help="Direct host (to skip the dht lookup)")
+@click.option("--host", default=None, help="Direct host (to skip the dht lookup)")  # stale (not ye planned)
 @click.option("--port", default=9000, help="Remote peer root")
 def send(peer_id, message, host, port, data_dir):
     our_peer_id, private_key, _, _ = _require_identity(data_dir)
@@ -277,7 +277,7 @@ def send(peer_id, message, host, port, data_dir):
         
         session.close()
         click.echo(f"Message sent")
-    asyncio.run(_send())
+    asyncio.run(_send()) 
     
 @main.command()
 @click.option("--host", default="0.0.0.0", help="the host to lsiten on")
@@ -292,7 +292,7 @@ def node(host, relay_port, dht_port, relay, bootstrap, store):
         return
     
     import logging
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     
     async def _run_node():
         tasks = []
