@@ -119,6 +119,7 @@ class NoiseSession:
         self.our_peer_id = our_peer_id
         self.remote_peer_id = remote_peer_id
         self._via_relay = via_relay
+        self.fingerprint = self._noise.get_handshake_hash().hex()
 
     async def send(self, content: str, client_message_id: str) -> None:
         payload = json.dumps({
@@ -156,7 +157,7 @@ class NoiseSession:
                     if on_receipt and "message_id" in msg:
                         await on_receipt(msg["message_id"])
                 elif msg_type == "message":
-                    await on_message(msg["peer_id"], msg["content"], msg.get("message_id", -1))
+                    await on_message(self.remote_peer_id, msg["content"], msg.get("message_id", -1))
         except asyncio.IncompleteReadError:
             logger.info(f"peer {self.remote_peer_id[:12]} disconnected")
         except Exception as e:

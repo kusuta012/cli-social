@@ -15,8 +15,6 @@ DEFAULT_DHT_PORT = 6969
 @dataclass
 class PeerInfo:
     peer_id: str
-    host: str
-    port: int
     username: str = ""
     last_seen: str = ""
     noise_pubkey_hex: str = ""
@@ -24,8 +22,6 @@ class PeerInfo:
     def to_json(self) -> str:
         return json.dumps({
             "peer_id": self.peer_id,
-            "host": self.host,
-            "port": self.port,
             "username": self.username,
             "last_seen": self.last_seen,
             "noise_pubkey_hex": self.noise_pubkey_hex
@@ -35,8 +31,6 @@ class PeerInfo:
         d = json.loads(data)
         return cls(
             peer_id=d["peer_id"],
-            host=d["host"],
-            port=d["port"],
             username=d.get("username", ""),
             last_seen=d.get("last_seen", ""),
             noise_pubkey_hex=d.get("noise_pubkey_hex", "")
@@ -69,9 +63,9 @@ class DHTNode:
         else:
             logger.warning("No nodes configured | in local mode")
     
-    async def reannounce(self, username: str = "", listen_port: int = 9000, host: str = "127.0.0.1", noise_pubkey_hex: str = "") -> None:
+    async def reannounce(self, username: str = "", noise_pubkey_hex: str = "") -> None:
         while self._started:
-            await self.announce(username=username, listen_port=listen_port, host=host, noise_pubkey_hex=noise_pubkey_hex)
+            await self.announce(username=username, noise_pubkey_hex=noise_pubkey_hex)
             await asyncio.sleep(60)
     
     async def stop(self) -> None:
@@ -80,11 +74,9 @@ class DHTNode:
             self._started = False
             logger.info("DHT node stopped")
             
-    async def announce(self, username: str = "", listen_port: int = 9000, host: str = "127.0.0.1", noise_pubkey_hex: str = "") -> None:
+    async def announce(self, username: str = "", noise_pubkey_hex: str = "") -> None:
         info = PeerInfo(
             peer_id=self.peer_id,
-            host=host,
-            port=listen_port,
             username=username,
             last_seen=datetime.now(timezone.utc).isoformat(),
             noise_pubkey_hex=noise_pubkey_hex

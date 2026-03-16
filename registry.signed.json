@@ -34,9 +34,20 @@
         "operator": "seradedstripes",
         "region": "global"
       }
+    },
+    {
+      "id": "relay-4",
+      "address": "tcp://168.138.14.26:44522",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "cybdo",
+        "region": "global"
+      }
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "8bade1bb425c4a04fa466333159264f09eeeb51de4da74695231dff045a0f8dc1fa35631b124da66ca10dbeea860a24e2a99d41219b26b5bf79658bf0fe75901"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "fd62ca01217c64e071ab5d7bceaecf7c0f1e7c78de98158038130f7ab5914abd81a9d2210f00392136bba613c7b09aecfe97b92b46499e65426c618238800007"
   }
 }

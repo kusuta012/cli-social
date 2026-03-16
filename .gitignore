@@ -18,3 +18,4 @@ Dockerfile
 operator.md
 relay.md
 docker-compose.yml
+publish_reg.py

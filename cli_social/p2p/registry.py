@@ -9,6 +9,7 @@ from cryptography.exceptions import InvalidSignature
 logger = logging.getLogger(__name__)
 
 TRUSTED_PUBKEYS = ["60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c"]
+REGISTRY_URL = "https://raw.githubusercontent.com/kusuta012/cli-social/main/registry.signed.json"
 
 def vrfy_registry_sign(public_key_hex: str, data: dict, sign_hex: str) -> bool:
     try:
@@ -26,17 +27,28 @@ def vrfy_registry_sign(public_key_hex: str, data: dict, sign_hex: str) -> bool:
         logger.debug(f"Signature verification failed: {e}")
         return False
 
-async def fetch_and_vrfy_registry(pointer_url: str, accept_community: bool = False) -> list[dict]:
-    def _fetch():
-        req = urllib.request.Request(pointer_url, headers={'User-Agent': 'cli-social-node/1.0'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+async def fetch_and_vrfy_registry(dht_payload: str | None, accept_community: bool = False) -> list[dict]:
+    registry_data = None
+    
+    if dht_payload:
+        try:
+            registry_data = json.loads(dht_payload)
+            logger.info("loaded registry from DHT")
+        except json.JSONDecodeError:
+            logger.warning(f"not a valid json received from DHT")
+    
+    if not registry_data:
+        logger.info(f"fetching registry from github")    
+        def _fetch():
+            req = urllib.request.Request(REGISTRY_URL, headers={'User-Agent': 'cli-social-node/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode('utf-8'))
         
-    try:
-        registry_data = await asyncio.to_thread(_fetch)
-    except Exception as e:
-        logger.error(f"failed to fetch registry from {pointer_url}: {e}")
-        raise
+        try:
+            registry_data = await asyncio.to_thread(_fetch)
+        except Exception as e:
+            logger.error(f"failed to fetch registry from {REGISTRY_URL}: {e}")
+            raise
     
     signatures = registry_data.get("signatures", {})
     valid_sigs = 0

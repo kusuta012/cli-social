@@ -10,9 +10,9 @@ from cli_social.identity import (
     _key_file_for
 )
 import json
-from cli_social.storage import Storage, db_path_for
+import time
+from cli_social.storage import db_path_for
 from cli_social.p2p.daemon import Daemon
-from cli_social.p2p.transport import connect
 from cli_social.p2p.dht import DHTNode
 from cli_social.p2p.relay import RelayServer
 from cli_social.identity import sign_registry_doc
@@ -124,30 +124,10 @@ def whoami(data_dir):
 
 @main.command()
 @DATA_DIR_OPTION
-def contacts(data_dir):
-    async def _list() -> list[dict[str, str]]:
-        async with await Storage.open(db_path_for(data_dir)) as s:
-            return await s.get_contacts()
-        
-    results: list[dict[str, str]] = asyncio.run(_list())
-    
-    if not results:
-        click.echo("No contacts yet, add them to start messaging")
-        return
-    
-    click.echo(f"\n{'Username':<20} {'Peer ID'}")
-    click.echo("-" * 70)
-    for c in results:
-        name = c["username"] or "(no name)"
-        click.echo(f"{name:<20} {c['peer_id']}")
-
-@main.command()
-@DATA_DIR_OPTION
-@click.option("--port", default=9000, help="TCP listen port")
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="bootstrap nodes as host:port")
 @click.option("--relay", default=None, help="relay node as host:port")
-def tui(port , dht_port, bootstrap, relay, data_dir):
+def tui(dht_port, bootstrap, relay, data_dir):
     import logging
 
     logging.basicConfig(
@@ -172,11 +152,10 @@ def tui(port , dht_port, bootstrap, relay, data_dir):
         rh, rp = relay.rsplit(":", 1)
         relay_host, relay_port = rh, int(rp)
         
-    run(peer_id=peer_id, private_key=private_key, username=username, listen_port=port, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes, db_path=db_path_for(data_dir), relay_host=relay_host, relay_port=relay_port)
+    run(peer_id=peer_id, private_key=private_key, username=username, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes, db_path=db_path_for(data_dir), relay_host=relay_host, relay_port=relay_port)
 
 @main.command()
 @DATA_DIR_OPTION
-@click.option("--port", default=9000, help="TCP listen port")
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="Bootstrap nodes as host:port")
 def daemon(port, dht_port, bootstrap, data_dir):
@@ -195,7 +174,6 @@ def daemon(port, dht_port, bootstrap, data_dir):
             peer_id=peer_id,
             private_key=private_key,
             username=username,
-            listen_port=port,
             dht_port=dht_port,
             bootstrap_nodes=bootstrap_nodes,
             db_path=db_path_for(data_dir)
@@ -214,74 +192,7 @@ def daemon(port, dht_port, bootstrap, data_dir):
             click.echo("\n Daemon stopped")
             
     asyncio.run(_run())
-
-@main.command()
-@DATA_DIR_OPTION
-@click.argument("peer_id")
-@click.option("--username", default="", help="Optional username for this contact")
-@click.option("--public-key", default="", help="contact's public key (hex)")
-@click.option("--host", default="", help="Direct host for local testing")
-@click.option("--port", default=0, help="Direct port for local testing")
-def add(peer_id, username, public_key, host, port, data_dir):
-    async def _add():
-        async with await Storage.open(db_path_for(data_dir)) as s:
-            await s.add_contact(
-                peer_id=peer_id,
-                username=username,
-                public_key=public_key,
-                host=host,
-                port=port
-            )
-    asyncio.run(_add())
-    click.echo(f"Contact added {username or peer_id}")
-    
-@main.command()
-@DATA_DIR_OPTION
-@click.argument("peer_id")
-@click.argument("message")
-@click.option("--host", default=None, help="Direct host (to skip the dht lookup)")  # stale (not ye planned)
-@click.option("--port", default=9000, help="Remote peer root")
-def send(peer_id, message, host, port, data_dir):
-    our_peer_id, private_key, _, _ = _require_identity(data_dir)
-    
-    async def _send():
-        target_host = host
-        if not target_host:
-            click.echo("looking up peer in DHT..")
-            dht = DHTNode(peer_id=our_peer_id, port=0)
-            await dht.start()
-            peer_info = await dht.lookup(peer_id)
-            await dht.stop()
-            if not peer_info:
-                click.echo(f"Peer {peer_id[:16]} not found in DHT", err=True)
-                return
-            target_host = peer_info.host
-            nonlocal port
-            port = peer_info.port
-            click.echo(f"found peer at {peer_id[:16]}.,")
-        
-        click.echo(f"Connecting to {peer_id[:16]}..")
-        session = await connect(
-            host=target_host,
-            port=port,
-            our_peer_id=our_peer_id,
-            our_private_key=private_key,
-            their_peer_id=peer_id
-        )
-        await session.send(message)
-        
-        async with await Storage.open(db_path_for(data_dir)) as s:
-            await s.save_message(
-                peer_id=peer_id,
-                sender_peer_id=our_peer_id,
-                content=message,
-                is_outgoing=True
-            )
-        
-        session.close()
-        click.echo(f"Message sent")
-    asyncio.run(_send()) 
-    
+  
 @main.command()
 @click.option("--host", default="0.0.0.0", help="the host to lsiten on")
 @click.option("--relay-port", default=19853, help="tcp port for relay server")
@@ -300,7 +211,7 @@ def node(host, relay_port, dht_port, relay, bootstrap, store):
     async def _run_node():
         tasks = []
         if bootstrap:
-            dht = DHTNode(peer_id="bootstrap_node", host=host, port=dht_port, bootstrap_nodes=DEFAULT_BOOTSTRAP_NODES)
+            dht = DHTNode(peer_id="bootstrap_node", host=host, port=dht_port, bootstrap_nodes=[])
             tasks.append(dht.start())
             click.echo(f"DHT bootstrap node listening on UDP {host}:{dht_port}")
             

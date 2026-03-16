@@ -296,7 +296,7 @@ class CLISocialApp(App):
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
             if self._daemon._dht:
-                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, listen_port=self.listen_port, host="127.0.0.1", noise_pubkey_hex=self._daemon.noise_pubkey_hex), name="dht_reannounce")
+                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, noise_pubkey_hex=self._daemon.noise_pubkey_hex), name="dht_reannounce")
                 self._presence_task = asyncio.create_task(self._presence_refresh(), name="presence_refresh")
             self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
         except Exception as e:
@@ -338,7 +338,12 @@ class CLISocialApp(App):
         async with await Storage.open(self.db_path) as s:
             convo_id = await s.get_or_create_conversation(item.peer_id)
             await s.mark_read(convo_id)
+            contact = await s.get_contact(item.peer_id)
         
+        if contact and contact.get("fingerprint"):
+            fp = contact["fingerprint"]
+            chat.query_one("#chat-header", Label).update(f"{item.username or item.peer_id[:16]} [dim]({fp[:8]}...{fp[-8:]})[/dim] F")
+                    
         if self._daemon and self._daemon._dht:
             online = await self._daemon._dht.is_online(item.peer_id)
             chat.set_status("ok" if online else "error")
@@ -386,8 +391,11 @@ class CLISocialApp(App):
                 await session.send(content, client_message_id)
                 chat.set_status("ok")
                 delivered = True
+                
+                async with await Storage.open(self.db_path) as s:
+                    await s.update_contact_fingerprint(peer_id, session.fingerprint)
                 break
-            
+                            
             except PeerOfflineError as e:
                 self.notify(f"Peer is offline, storing to forward later")
                 try:

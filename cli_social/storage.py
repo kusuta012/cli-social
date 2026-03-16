@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     public_key TEXT NOT NULL DEFAULT '',
     host TEXT NOT NULL DEFAULT '',
     port INTEGER NOT NULL DEFAULT 0,
-    added_at TEXT NOT NULL
+    added_at TEXT NOT NULL,
+    fingerprint TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS conversations (
@@ -53,6 +54,10 @@ class Storage:
         db = await aiosqlite.connect(db_path)
         db.row_factory = aiosqlite.Row
         await db.executescript(SCHEMA)
+        async with db.execute("PRAGMA table_info(contacts)") as cursor:
+            columns = [row["name"] for row in await cursor.fetchall()]
+            if "fingerprint" not in columns:
+                await db.execute("ALTER TABLE contacts ADD column fingerprint TEXT NOT NULL DEFAULT ''")
         await db.commit()
         return cls(db)
     
@@ -112,7 +117,11 @@ class Storage:
     async def update_contact_pubkey(self, peer_id: str, pubkey_hex: str) -> None:
         await self._db.execute("UPDATE contacts SET public_key = ? WHERE peer_id = ?", (pubkey_hex, peer_id))
         await self._db.commit()
-        
+    
+    async def update_contact_fingerprint(self, peer_id:str, fingerprint: str) -> None:
+        await self._db.execute("UPDATE contacts SET fingerprint = ? WHERE peer_id = ?", (fingerprint, peer_id))
+        await self._db.commit()
+               
     async def get_or_create_conversation(self, peer_id: str) -> int:
         async with self._db.execute(
             "SELECT id FROM conversations WHERE peer_id = ?", (peer_id,)

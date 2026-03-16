@@ -4,6 +4,8 @@ import json
 import logging
 import random
 import uuid
+import time
+import traceback
 from collections import deque
 from pathlib import Path
 from typing import Callable, Awaitable
@@ -71,8 +73,6 @@ class Daemon:
         await self._dht.start()
         await self._dht.announce(
             username=self.username,
-            listen_port=self.listen_port,
-            host="127.0.0.1",
             noise_pubkey_hex=self.noise_pubkey_hex
         )
         
@@ -168,7 +168,7 @@ class Daemon:
         finally:
             self._relay_reader = None
             self._relay_writer = None
-            logger.info("relay listener stopped")
+            logger.info(f"relay listener stopped at: {traceback.format_exc()}")
             if self._running:
                 await asyncio.sleep(3)
                 await self._connect_to_relay()
@@ -255,14 +255,10 @@ class Daemon:
             logger.error("blah blah")
             return
         
-        pointer = await self._dht.get_value("relays.v1")
-        
-        if not pointer:
-            logger.warning("No relays.v1 pointer in DHT, back to hardcoded ahh")
-            pointer = "https://raw.githubusercontent.com/kusuta012/cli-social/main/registry.signed.json"
+        dht_payload = await self._dht.get_value("relays.v1")
             
         try:
-            relays = await fetch_and_vrfy_registry(pointer, accept_community=True)
+            relays = await fetch_and_vrfy_registry(dht_payload, accept_community=False)
             if not relays:
                 logger.error("No relays found in the verified registry")
                 return
