@@ -15,7 +15,6 @@ operator/
 pip-log.txt
 pip-delete-this-directory.txt
 registry.template.json
-Dockerfile
 operator.md
 relay.md
 docker-compose.yml
