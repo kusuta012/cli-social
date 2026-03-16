@@ -48,7 +48,7 @@ class DHTNode:
         self.host = host
         self.port = port
         self.bootstrap_nodes = bootstrap_nodes or []
-        self._server = Server()
+        self._server = Server(ksize=20, alpha=3)
         self._started = False
     
     async def start(self) -> None:
