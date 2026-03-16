@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import secrets
+import socket
 from cli_social.p2p.utils import read_frame, write_frame
 from cli_social.p2p.registry import fetch_and_vrfy_registry
 
@@ -95,15 +96,40 @@ class RelayServer:
         while True:
             try:
                 relays = await fetch_and_vrfy_registry(None, accept_community=False)
+                my_iden = None
+                if not getattr(self, "_id_disc", False):
+                    for r in relays:
+                        addr = r.get("address", "")
+                        if not addr.startswith("tcp://"): continue
+                    
+                        host, _ = addr.replace("tcp://", "").split(":")
+
+                        temp_sock = None
+                        try:
+                            temp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                            temp_sock.bind((host, 0))
+                            temp_sock.close()
+                            
+                            my_iden = r
+                            self.relay_id = r.get("id")
+                            self._id_disc = True
+                            logger.info(f"identified myself as '{self.relay_id}' at {host}")
+                            break
+                        except OSError:
+                            pass
+                        finally:
+                            if temp_sock:
+                                temp_sock.close()
+                        
+                
                 for r in relays:
+                    if r.get("id") == self.relay_id:
+                        continue
+                    
                     addr = r.get("address", "")
                     if not addr.startswith("tcp://"): continue
                     
                     host, port = addr.replace("tcp://", "").split(":")
-                    port = int(port)
-                    
-                    if port == self.port and host in ["127.0.0.1", "localhost", "0.0.0.0"]:
-                        continue
                     
                     if addr not in[c.peer_id for c in self._mesh_conns.values()]:
                         asyncio.create_task(self._dial_mesh_relay(host, port , addr))
