@@ -2,8 +2,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
-import uuid
 import time
 import traceback
 from collections import deque
@@ -71,9 +69,16 @@ class Daemon:
             bootstrap_nodes=self.bootstrap_nodes
         )
         await self._dht.start()
+        if self.relay_host:
+            await self._connect_to_relay()
+        else:
+            await self._discover_and_connect_relay()
+        
+        hm_str = f"{self.relay_host}:{self.relay_port}" if self.relay_host else ""
         await self._dht.announce(
             username=self.username,
-            noise_pubkey_hex=self.noise_pubkey_hex
+            noise_pubkey_hex=self.noise_pubkey_hex,
+            home_relay=hm_str
         )
         
         self._server = await asyncio.start_server(
@@ -85,10 +90,6 @@ class Daemon:
         logger.info(f"Daemon listening on {self.listen_port}")
         logger.info(f"peer id {self.peer_id[:16]}.....{self.peer_id[-8:]}")
         
-        if self.relay_host:
-            await self._connect_to_relay()
-        else:
-            await self._discover_and_connect_relay()
     
     # Idk how but on every night coding session I end up in this file
 
@@ -252,7 +253,7 @@ class Daemon:
     async def _discover_and_connect_relay(self) -> None:
         
         if self._dht is None:
-            logger.error("blah blah")
+            logger.error("DHT not running, cannot dicsover relays")
             return
         
         dht_payload = await self._dht.get_value("relays.v1")
@@ -268,13 +269,42 @@ class Daemon:
                 logger.error("No valid relays found")
                 return
             
-            chosen = random.choice(tcp_relays) # todo: keeping it random for now , but needs to be efficient relay routes
+            logger.info(f"found {len(tcp_relays)}, measuring latency..")
+            
+            async def measure_latency(relay: dict) -> tuple[dict, float]:
+                addr = relay["address"].replace("tcp://", "")
+                host, port = addr.split(":")
+                start_time = time.perf_counter()
+                try:
+                    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), timeout=3)
+                    writer.close()
+                    await writer.wait_closed()
+                    latency = time.perf_counter() - start_time
+                    return relay, latency
+                except Exception:
+                    return relay, float('inf')
+            
+            ping_tasks =[measure_latency(r) for r in tcp_relays]
+            results = await asyncio.gather(*ping_tasks)
+            alive_relays =[(r,lat) for r, lat in results if lat != float('inf')]
+            
+            if not alive_relays:
+                logger.error("all relays unreachable at the moment, please retry")
+                return
+            
+            alive_relays.sort(key=lambda x: x[1])
+            for r, lat in alive_relays:
+                region = r.get("meta", {}).get("region", "unknown")
+                logger.info(f"  {r['id']} ({region}), {lat * 100:.0f} ms")
+            
+            chosen = alive_relays[0][0]
+            
             addr = chosen["address"].replace("tcp://", "")
             host, port = addr.split(":")
             
             self.relay_host = host
             self.relay_port = int(port)
-            logger.info(f"Chose relay from registry {self.relay_host}:{self.relay_port}")
+            logger.info(f"Chose fasetest relay from registry {self.relay_host}:{self.relay_port}")
             
             await self._connect_to_relay()
             

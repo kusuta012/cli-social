@@ -18,13 +18,15 @@ class PeerInfo:
     username: str = ""
     last_seen: str = ""
     noise_pubkey_hex: str = ""
+    home_relay: str = ""
     
     def to_json(self) -> str:
         return json.dumps({
             "peer_id": self.peer_id,
             "username": self.username,
             "last_seen": self.last_seen,
-            "noise_pubkey_hex": self.noise_pubkey_hex
+            "noise_pubkey_hex": self.noise_pubkey_hex,
+            "home_relay": self.home_relay
         })
     @classmethod
     def from_json(cls, data:str) -> "PeerInfo":
@@ -33,7 +35,8 @@ class PeerInfo:
             peer_id=d["peer_id"],
             username=d.get("username", ""),
             last_seen=d.get("last_seen", ""),
-            noise_pubkey_hex=d.get("noise_pubkey_hex", "")
+            noise_pubkey_hex=d.get("noise_pubkey_hex", ""),
+            home_relay=d.get("home_relay", "")
         )
 
 class DHTNode:
@@ -63,9 +66,9 @@ class DHTNode:
         else:
             logger.warning("No nodes configured | in local mode")
     
-    async def reannounce(self, username: str = "", noise_pubkey_hex: str = "") -> None:
+    async def reannounce(self, username: str = "", noise_pubkey_hex: str = "", home_relay: str = "") -> None:
         while self._started:
-            await self.announce(username=username, noise_pubkey_hex=noise_pubkey_hex)
+            await self.announce(username=username, noise_pubkey_hex=noise_pubkey_hex, home_relay=home_relay)
             await asyncio.sleep(60)
     
     async def stop(self) -> None:
@@ -74,15 +77,16 @@ class DHTNode:
             self._started = False
             logger.info("DHT node stopped")
             
-    async def announce(self, username: str = "", noise_pubkey_hex: str = "") -> None:
+    async def announce(self, username: str = "", noise_pubkey_hex: str = "", home_relay: str = "") -> None:
         info = PeerInfo(
             peer_id=self.peer_id,
             username=username,
             last_seen=datetime.now(timezone.utc).isoformat(),
-            noise_pubkey_hex=noise_pubkey_hex
+            noise_pubkey_hex=noise_pubkey_hex,
+            home_relay=home_relay
         )
         await self._server.set(self.peer_id, info.to_json())
-        logger.info(f"Announced self to DHT {self.peer_id[:12]}")
+        logger.info(f"Announced self to DHT {self.peer_id[:12]} on relay {home_relay}")
         
     async def lookup(self, peer_id: str) -> Optional[PeerInfo]:
         result = await self._server.get(peer_id)

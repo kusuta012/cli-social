@@ -296,7 +296,8 @@ class CLISocialApp(App):
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(self._daemon.run_forever(), name="daemon")
             if self._daemon._dht:
-                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, noise_pubkey_hex=self._daemon.noise_pubkey_hex), name="dht_reannounce")
+                hm_str = f"{self.relay_host}:{self.relay_port}"
+                self._reannounce_task = asyncio.create_task(self._daemon._dht.reannounce(username=self.username, noise_pubkey_hex=self._daemon.noise_pubkey_hex, home_relay=hm_str), name="dht_reannounce")
                 self._presence_task = asyncio.create_task(self._presence_refresh(), name="presence_refresh")
             self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
         except Exception as e:
