@@ -6,8 +6,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
 COPY . .
+RUN pip install --no-cache-dir .
 ENTRYPOINT ["sxcl"]
 CMD ["node"]
