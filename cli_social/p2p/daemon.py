@@ -28,13 +28,14 @@ class Daemon:
         peer_id: str,
         private_key: bytes,
         username: str = "",
-        listen_port: int = 9000,
+        listen_port: int = 53241,
         dht_port: int = 6969,
         bootstrap_nodes: list[tuple[str, int]] | None = None,
         on_message: MessageCallback | None = None,
         db_path: Path | None = None,
         relay_host: str | None = None,
-        relay_port: int = 9100
+        relay_port: int | None = None,
+        cached_relay: dict | None = None
     ):
         self.peer_id = peer_id
         self.private_key = private_key
@@ -45,7 +46,8 @@ class Daemon:
         self.on_message = on_message
         self.db_path = db_path
         self.relay_host = relay_host
-        self.relay_port = relay_port 
+        self.relay_port = relay_port
+        self.cached_relay = cached_relay 
         self._server: asyncio.Server | None = None
         self._dht: DHTNode | None = None
         self._storage: Storage | None = None
@@ -69,6 +71,8 @@ class Daemon:
             bootstrap_nodes=self.bootstrap_nodes
         )
         await self._dht.start()
+        asyncio.create_task(self._run_p2p_server())
+        asyncio.create_task(self._run_relay_mngr())
         if self.relay_host:
             await self._connect_to_relay()
         else:
@@ -80,19 +84,44 @@ class Daemon:
             noise_pubkey_hex=self.noise_pubkey_hex,
             home_relay=hm_str
         )
-        
-        self._server = await asyncio.start_server(
-            self._handle_connection,
-            "0.0.0.0",
-            self.listen_port
-        )
         self._running = True
-        logger.info(f"Daemon listening on {self.listen_port}")
+        logger.info("Daemon startup intiated in the backgreound")
         logger.info(f"peer id {self.peer_id[:16]}.....{self.peer_id[-8:]}")
         
     
     # Idk how but on every night coding session I end up in this file
-
+    async def _run_p2p_server(self):
+        self._server = await asyncio.start_server(self._handle_connection, "0.0.0.0", self.listen_port)
+        logger.info(f"p2p server listening on {self.listen_port}")
+        async with self._server:
+            await self._server.serve_forever()
+    
+    async def _run_relay_mngr(self):
+        if self.relay_host:
+            await self._connect_to_relay()
+        else:
+            is_first_run = True
+            while self._running:
+                if is_first_run and self.cached_relay:
+                    self.relay_host = self.cached_relay["host"]
+                    self.relay_port = self.cached_relay["port"]
+                    try:
+                        await asyncio.wait_for(self._connect_to_relay(), timeout=3)
+                    except Exception:
+                        self.relay_host = None
+                        self.cached_relay = None
+                
+                if not self._relay_writer:
+                    await self._discover_and_connect_relay()
+                    
+                if self._relay_writer:
+                    is_first_run = False
+                    logger.info("announcing presence to DHT")
+                    home_relay_str = f"{self.relay_host}:{self.relay_port}"
+                    await self._dht.announce(username=self.username, noise_pubkey_hex=self.noise_pubkey_hex, home_relay=home_relay_str)
+                    await asyncio.sleep(60)
+                else:
+                    await asyncio.sleep(30)
                         
     async def _connect_to_relay(self) -> None:
         try:
@@ -276,7 +305,7 @@ class Daemon:
                 host, port = addr.split(":")
                 start_time = time.perf_counter()
                 try:
-                    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), timeout=3)
+                    writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), timeout=3)
                     writer.close()
                     await writer.wait_closed()
                     latency = time.perf_counter() - start_time

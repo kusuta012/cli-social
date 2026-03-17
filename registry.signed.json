@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "timestamp": 1773749785,
+  "version": 4,
+  "timestamp": 1773753812,
   "relays": [
     {
       "id": "relay-1",
@@ -81,7 +81,7 @@
     },
     {
       "id": "relay-8",
-      "address": "tcp:/157.230.92.249:62614",
+      "address": "tcp://157.230.92.249:62614",
       "roles": [
         "relay"
       ],
@@ -92,6 +92,6 @@
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "48df23a5d7d4d90d3c9e788a33d78dae10220472d606f7502ff2c4b2083148d0dbe6421521b347dc9a7e29f9a52a2ef473d8c7deb7a56b247e744a06ab1f9e08"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "fd7cb77734d14099ab623924255ea6312e429c7a21219d09423c2803a6219f2ca553f1effa274da5dffd8543e8e6a5fa6b453a6a0c7dd0bc5fa13188b1bc650f"
   }
 }

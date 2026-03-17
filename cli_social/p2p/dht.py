@@ -51,17 +51,17 @@ class DHTNode:
         self.host = host
         self.port = port
         self.bootstrap_nodes = bootstrap_nodes or []
-        self._server = Server(ksize=20, alpha=3)
+        self._server = Server(ksize=8, alpha=5)
         self._started = False
     
     async def start(self) -> None:
         await self._server.listen(self.port)
+        self._server.protocol.wait_timeout = 2.0
         self._started = True
         logger.info(f"TNT?? nah DHT node listening on port {self.port}")
         
         if self.bootstrap_nodes:
-            await self._server.bootstrap(self.bootstrap_nodes)
-            await asyncio.sleep(2)
+            asyncio.create_task(self._server.bootstrap(self.bootstrap_nodes))
             logger.info(f"bootsrapped with {self.bootstrap_nodes}")
         else:
             logger.warning("No nodes configured | in local mode")
