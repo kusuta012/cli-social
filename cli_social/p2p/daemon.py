@@ -305,7 +305,7 @@ class Daemon:
                 host, port = addr.split(":")
                 start_time = time.perf_counter()
                 try:
-                    writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), timeout=3)
+                    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), timeout=3)
                     writer.close()
                     await writer.wait_closed()
                     latency = time.perf_counter() - start_time
