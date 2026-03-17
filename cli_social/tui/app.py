@@ -572,7 +572,7 @@ class CLISocialApp(App):
                 "host": self._daemon.relay_host,
                 "port": self._daemon.relay_port,
             }
-            self.stale_path.write_text(json.dumps(relay_info))
+            self.state_path.write_text(json.dumps(relay_info))
         if self._daemon_task:
             self._daemon_task.cancel()
         if self._presence_task:
