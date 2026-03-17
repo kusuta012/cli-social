@@ -39,5 +39,7 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/sxcl:latest
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            BUILD_ID=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
