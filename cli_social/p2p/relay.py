@@ -56,7 +56,8 @@ class RelayServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 9100):
         self.host = host
         self.port = port
-        self.relay_id = f"relay_{secrets.token_hex(4)}"
+        host_hash = socket.gethostname()
+        self.relay_id = f"relay_{host_hash[:8]}"
         self._online: dict[str, RelayConnection] = {}
         self._store: dict[str, list[bytes]] = {}
         self._server: asyncio.Server | None = None
@@ -64,6 +65,7 @@ class RelayServer:
         self._mesh_conns: dict[str, RelayConnection] = {}
         self._mesh_presence: dict[str, str] = {}
         self._mesh_task: asyncio.Task | None = None
+        self._me_addr: set[str] = set()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -83,7 +85,7 @@ class RelayServer:
         self._online.clear()
         self._mesh_conns.clear()
         logger.info(
-            f"Relay stopped , You are no longer relaying messages, Please restart when possible , we really need these to keep our app running <3")
+            "Relay stopped , You are no longer relaying messages, Please restart when possible , we really need these to keep our app running <3")
 
     async def run_forever(self) -> None:
         if self._server is None:
@@ -96,43 +98,22 @@ class RelayServer:
         while True:
             try:
                 relays = await fetch_and_vrfy_registry(None, accept_community=False)
-                my_iden = None
-                if not getattr(self, "_id_disc", False):
-                    for r in relays:
-                        addr = r.get("address", "")
-                        if not addr.startswith("tcp://"): continue
-                    
-                        host, _ = addr.replace("tcp://", "").split(":")
-
-                        temp_sock = None
-                        try:
-                            temp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                            temp_sock.bind((host, 0))
-                            temp_sock.close()
-                            
-                            my_iden = r
-                            self.relay_id = r.get("id")
-                            self._id_disc = True
-                            logger.info(f"identified myself as '{self.relay_id}' at {host}")
-                            break
-                        except OSError:
-                            pass
-                        finally:
-                            if temp_sock:
-                                temp_sock.close()
-                        
-                
                 for r in relays:
-                    if r.get("id") == self.relay_id:
+                    targ_id = r.get("id")
+                    addr = r.get("address", "")
+
+                    if targ_id == self.relay_id:
                         continue
                     
-                    addr = r.get("address", "")
-                    if not addr.startswith("tcp://"): continue
-                    
+                    if addr in self._me_addr:
+                        continue
+
+                    if not addr.startswith("tcp://"):
+                        continue
                     host, port = addr.replace("tcp://", "").split(":")
                     
-                    if addr not in[c.peer_id for c in self._mesh_conns.values()]:
-                        asyncio.create_task(self._dial_mesh_relay(host, port , addr))
+                    if targ_id not in self._mesh_conns:
+                        asyncio.create_task(self._dial_mesh_relay(host, int(port) , addr))
             
             except Exception as e:
                 logger.debug(f"Mesh manager loop error: {e}")
@@ -148,11 +129,20 @@ class RelayServer:
             
             ack_raw = await read_frame(reader)
             ack = json.loads(ack_raw)
+            remote_relay_id = ack.get("relay_id", addr_key)
+            
+            if remote_relay_id == self.relay_id:
+                logger.info("Its me")
+                self._me_addr.add(addr_key)
+                writer.close()
+                await writer.wait_closed()
+                return
+            
             if ack.get("type") != "mesh_ok":
                 writer.close()
                 return
             
-            remote_relay_id = ack.get("relay_id", addr_key)
+            
             conn = RelayConnection(peer_id=addr_key, reader=reader, writer=writer)
             self._mesh_conns[remote_relay_id] = conn
             logger.info(f"established mesh link to {remote_relay_id} | {host}:{port}")
@@ -164,8 +154,8 @@ class RelayServer:
                 msg = await conn.receive_msg()
                 await self._handle_mesh_message(msg)
             
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"failed to connect to {host}:{port}, {e}")
         finally:
             if conn:
                 for rid, c in list(self._mesh_conns.items()):
@@ -203,11 +193,14 @@ class RelayServer:
             msg_type = msg.get("type")
             
             if msg_type == "mesh_register":
-                remote_relay_id = msg.get("relay_id", secrets.token_hex(4))
+                remote_relay_id = msg.get("relay_id")
+                await _write_msg(writer, {"type": "mesh_ok", "relay_id": self.relay_id})
+                
+                if remote_relay_id == self.relay_id:
+                    return
+                
                 conn = RelayConnection(peer_id=peer_addr[0], reader=reader, writer=writer)
                 self._mesh_conns[remote_relay_id] = conn
-                
-                await conn.send_msg({"type": "mesh_ok", "relay_id": self.relay_id})
                 
                 for local_peer in self._online.keys():
                     await conn.send_msg({"type": "mesh_add", "peer_id": local_peer, "relay_id": self.relay_id})
