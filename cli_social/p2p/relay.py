@@ -188,7 +188,7 @@ class RelayServer:
                     await local_target.send_msg({"type": "stored_message", "payload": payload_hex})
                     logger.info(f"delivered mesh msg to local peer {to_peer[:8]}")
                 except Exception as e:
-                    logger.error(f"failed to deliver mesh msg to local peer {to_peer[:8]}")
+                    logger.error(f"failed to deliver mesh msg to local peer {to_peer[:8]}, {e}")
             else:
                 logger.warning(f"target {to_peer[:8]} offline , storing!")
                 self._store_payload(to_peer, bytes.fromhex(payload_hex))

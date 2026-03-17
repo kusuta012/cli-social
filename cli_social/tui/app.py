@@ -52,11 +52,6 @@ class Sidebar(Vertical):
     def compose(self) -> ComposeResult:
         yield Label(" Conversations", id="sidebar-title")
         yield ListView(id="conversation-list")
-
-
-# the comment here is now oudated
-
-
 class MessageBubble(Static):
     DEFAULT_CSS = """
     MessageBubble {
@@ -79,10 +74,8 @@ class MessageBubble(Static):
         sender: str,
         sent_at: str,
         is_outgoing: bool,
-        relay_port: int,
         delivered: bool = False,
         message_id: int = -1,
-        db_path: Path = DEFAULT_DB_PATH,
     ) -> None:
         super().__init__()
         self.msg_content = content
@@ -91,14 +84,6 @@ class MessageBubble(Static):
         self.is_outgoing = is_outgoing
         self.delivered = delivered
         self.message_id = message_id
-        self.relay_port = relay_port
-        self.state_path = db_path.parent / "state.json"
-        self.cached_relay = None
-        if self.state_path.exists():
-            try:
-                self.cached_relay = json.loads(self.state_path.read_text())
-            except Exception:
-                pass
         self.add_class("outgoing" if is_outgoing else "incoming")
 
     def compose(self) -> ComposeResult:
@@ -144,7 +129,7 @@ class ChatPane(Vertical):
         yield ScrollableContainer(id="message-scroll")
 
     async def load_messages(
-        self, peer_id: str, username: str, relay_port: int, db_path: Path = DEFAULT_DB_PATH
+        self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH
     ) -> None:
         self.current_peer_id = peer_id
         self.current_username = username
@@ -244,7 +229,7 @@ class ChatModal(Vertical):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         peer_id = event.value.strip().lower()
-        app: CLISocialApp = self.app  # type: ignore[assignment]
+        app: CLISocialApp = self.app
         err_label = self.query_one("#chat-modal-error", Label)
         error = self._validate_peer_id(peer_id, app.peer_id)
         if error:
@@ -260,9 +245,8 @@ class ChatModal(Vertical):
             self.remove()
             return
 
-        await self.app.start_conversation(peer_id)  # type: ignore
+        await self.app.start_conversation(peer_id)
         self.remove()
-
 
 class CLISocialApp(App):
     TITLE = "cli-social"
@@ -311,11 +295,18 @@ class CLISocialApp(App):
         self.db_path = db_path
         self._daemon: Daemon | None = None
         self._daemon_task: asyncio.Task | None = None
-        self._reannounce_task: asyncio.Task | None = None
         self._presence_task: asyncio.Task | None = None
         self.relay_host = relay_host
         self.relay_port = relay_port
+        self.state_path = db_path.parent / "state.json"
         self.cached_relay = None
+        if self.state_path.exists():
+            try:
+                self.cached_relay = json.loads(self.state_path.read_text())
+                logger.info(f"loaded cache relay {self.cached_relay}")
+            except Exception:
+                logger.warning("could not load cached relay")
+                pass
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -331,6 +322,8 @@ class CLISocialApp(App):
         self.set_focus(self.query_one("#conversation-list"))
 
     async def _start_daemon(self) -> None:
+        self.notify("Starting daemon, this may take a while", title="System", severity="information", timeout=3)
+        self.call_from_thread(self.query_one(ChatPane).set_status, "connecting")
         try:
             self._daemon = Daemon(
                 peer_id=self.peer_id,
@@ -350,21 +343,13 @@ class CLISocialApp(App):
                 self._daemon.run_forever(), name="daemon"
             )
             if self._daemon._dht:
-                hm_str = f"{self.relay_host}:{self.relay_port}"
-                self._reannounce_task = asyncio.create_task(
-                    self._daemon._dht.reannounce(
-                        username=self.username,
-                        noise_pubkey_hex=self._daemon.noise_pubkey_hex,
-                        home_relay=hm_str,
-                    ),
-                    name="dht_reannounce",
-                )
                 self._presence_task = asyncio.create_task(
                     self._presence_refresh(), name="presence_refresh"
                 )
-            self.notify(f"Daemon up! | port {self.listen_port}", timeout=3)
+            self.call_from_thread(self.notify, f"Daemon up! | port {self.listen_port}", severity ="information", timeout=3)
         except Exception as e:
-            self.notify(f"Daemon failed to start: {e}", severity="error", timeout=8)
+            self.call_from_thread(self.notify, f"Daemon failed to start: {e}", severity="error", timeout=8)
+            self.call_from_thread(self.query_one(ChatPane).set_status, "error")
 
     async def _load_conversations(self) -> None:
         async with await Storage.open(self.db_path) as s:
@@ -403,7 +388,9 @@ class CLISocialApp(App):
         if not isinstance(item, ConversationItem):
             return
         chat = self.query_one(ChatPane)
+
         await chat.load_messages(item.peer_id, item.username, db_path=self.db_path)
+
         async with await Storage.open(self.db_path) as s:
             convo_id = await s.get_or_create_conversation(item.peer_id)
             await s.mark_read(convo_id)
@@ -414,10 +401,14 @@ class CLISocialApp(App):
             chat.query_one("#chat-header", Label).update(
                 f"{item.username or item.peer_id[:16]} [dim]({fp[:8]}...{fp[-8:]})[/dim] F"
             )
-
+        
+        chat.set_status("connecting")
         if self._daemon and self._daemon._dht:
-            online = await self._daemon._dht.is_online(item.peer_id)
-            chat.set_status("ok" if online else "error")
+            async def fetch_presence():
+                online = await self._daemon._dht.is_online(item.peer_id)
+                if chat.current_peer_id == item.peer_id:
+                    chat.set_status("ok" if online else "error")
+            asyncio.create_task(fetch_presence())
         self.set_focus(self.query_one("#message-input"))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -479,10 +470,10 @@ class CLISocialApp(App):
                 break
 
             except PeerOfflineError as e:
-                self.notify(f"Peer is offline, storing to forward later")
+                self.notify("Peer is offline, storing to forward later") # todo remove this 
                 try:
-                    assert self._daemon._dht, "DHT not running"  # type: ignore
-                    peer_info = await self._daemon._dht.lookup(peer_id)  # type: ignore
+                    assert self._daemon._dht, "DHT not running"
+                    peer_info = await self._daemon._dht.lookup(peer_id) 
                     if not peer_info or not peer_info.noise_pubkey_hex:
                         raise ValueError(
                             "could not find peer's public key in DHT for offline messaging"
@@ -496,9 +487,11 @@ class CLISocialApp(App):
                         client_message_id,
                     )
                     await write_frame(e.writer, encrypt_blob)
+                    await e.writer.drain()
                     e.writer.close()
+                    await e.writer.wait_closed()
 
-                    self.notify("msg stored for later", severity="information")
+                    self.notify("msg stored for later", severity="information") # todo remove this
                     chat.set_status("ok")
                     delivered = False
                     break
@@ -557,10 +550,10 @@ class CLISocialApp(App):
                 if item.peer_id == peer_id:
                     username = item.username or peer_id[:10]
                     break
-            await chat.append_message(content, username, now, is_outgoing=False)
+            self.call_from_thread(chat.append_message, content, username, now, False)
         else:
-            self.notify(f"New message from {peer_id[:12]}....")
-        await self._load_conversations()
+            self.call_from_thread(self.notify, f"New message from {peer_id[:12]}....")
+        self.call_from_thread(self._load_conversations)
 
     async def _presence_refresh(self) -> None:
         while True:
@@ -579,11 +572,9 @@ class CLISocialApp(App):
                 "host": self._daemon.relay_host,
                 "port": self._daemon.relay_port,
             }
-            self._stale_path.write_text(json.dumps(relay_info))
+            self.stale_path.write_text(json.dumps(relay_info))
         if self._daemon_task:
             self._daemon_task.cancel()
-        if self._reannounce_task:
-            self._reannounce_task.cancel()
         if self._presence_task:
             self._presence_task.cancel()
         self.exit()
