@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "timestamp": 1773513649,
+  "version": 3,
+  "timestamp": 1773749785,
   "relays": [
     {
       "id": "relay-1",
@@ -45,9 +45,53 @@
         "operator": "cybdo",
         "region": "global"
       }
+    },
+    {
+      "id": "relay-5",
+      "address": "tcp://167.172.54.215:36050",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "speedhawks",
+        "region": "global"
+      }
+    },
+    {
+      "id": "relay-6",
+      "address": "tcp://168.144.33.104:43405",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "speedhawks",
+        "region": "global"
+      }
+    },
+    {
+      "id": "relay-7",
+      "address": "tcp://146.190.115.144:41861",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "speedhawks",
+        "region": "global"
+      }
+    },
+    {
+      "id": "relay-8",
+      "address": "tcp:/157.230.92.249:62614",
+      "roles": [
+        "relay"
+      ],
+      "meta": {
+        "operator": "speedhawks",
+        "region": "global"
+      }
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "fd62ca01217c64e071ab5d7bceaecf7c0f1e7c78de98158038130f7ab5914abd81a9d2210f00392136bba613c7b09aecfe97b92b46499e65426c618238800007"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "48df23a5d7d4d90d3c9e788a33d78dae10220472d606f7502ff2c4b2083148d0dbe6421521b347dc9a7e29f9a52a2ef473d8c7deb7a56b247e744a06ab1f9e08"
   }
 }

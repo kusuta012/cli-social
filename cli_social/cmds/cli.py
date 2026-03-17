@@ -76,6 +76,9 @@ def sign(input_file, output_file, data_dir):
         raise SystemExit(1)
     
     registry_data = json.load(input_file)
+    registry_data["version"] = registry_data.get("version", 0) + 1
+    registry_data["timestamp"] = int(time.time())
+    registry_data["signatures"] = {}
     signed_registry = sign_registry_doc(private_key, registry_data)
     json.dump(signed_registry, output_file, indent=2)
     click.echo(f"signed registry wrote it to {output_file.name}")
