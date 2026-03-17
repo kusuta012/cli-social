@@ -340,7 +340,7 @@ class RelayServer:
             if remote_conn and remote_conn.alive:
                 logger.info(f"routing msg to {target_peer_id[:8]} via mesh relay {remote_relay_id}")
 
-                await sender.send_msg({"type": "ok"})
+                await sender.send_msg({"type": "stored", "message_id": msg.get("message_id", "")})
                 try:
                     payload = await asyncio.wait_for(sender.receive_raw(), timeout=PIPE_TIMEOUT)
                     await remote_conn.send_msg({"type": "mesh_forward", "to_peer": target_peer_id, "payload": payload.hex()})
