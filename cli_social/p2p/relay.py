@@ -66,6 +66,8 @@ class RelayServer:
         self._mesh_presence: dict[str, str] = {}
         self._mesh_task: asyncio.Task | None = None
         self._me_addr: set[str] = set()
+        self._pending_dials: set[str] = set()
+        self._bg_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -112,15 +114,18 @@ class RelayServer:
                         continue
                     host, port = addr.replace("tcp://", "").split(":")
                     
-                    if targ_id not in self._mesh_conns:
-                        asyncio.create_task(self._dial_mesh_relay(host, int(port) , addr)) # blank commit for docker img
-            
+                    if targ_id not in self._mesh_conns and targ_id not in self._pending_dials:
+                        self._pending_dials.add(targ_id)
+                        task = asyncio.create_task(self._dial_mesh_relay(host, int(port) , addr, targ_id))
+                        self._bg_tasks.add(task)
+                        task.add_done_callback(self._bg_tasks.discard)
+
             except Exception as e:
                 logger.debug(f"Mesh manager loop error: {e}")
 
             await asyncio.sleep(60)
     
-    async def _dial_mesh_relay(self, host: str, port: int, addr_key: str) -> None:
+    async def _dial_mesh_relay(self, host: str, port: int, addr_key: str, targ_id: str) -> None:
         conn = None
         try:
             reader, writer = await asyncio.open_connection(host , port)
@@ -157,6 +162,7 @@ class RelayServer:
         except Exception as e:
             logger.debug(f"failed to connect to {host}:{port}, {e}")
         finally:
+            self._pending_dials.discard(targ_id)
             if conn:
                 for rid, c in list(self._mesh_conns.items()):
                     if c is conn:
@@ -165,7 +171,10 @@ class RelayServer:
     
     def _broadcast_mesh(self, msg: dict) -> None:
         for conn in self._mesh_conns.values():
-            asyncio.create_task(conn.send_msg(msg))
+            task = asyncio.create_task(conn.send_msg(msg))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
+            
             
     async def _handle_mesh_message(self, msg:dict) -> None:
         msg_type = msg.get("type")
@@ -348,7 +357,7 @@ class RelayServer:
                 except asyncio.TimeoutError:
                     logger.warning(f"sender {sender.peer_id[:8]} timedout sending payload ")
                 except Exception as e:
-                    logger.eror(f"mesh fowarding error {e}")
+                    logger.error(f"mesh fowarding error {e}")
                 return 
 
             await sender.send_msg({"type": "stored", "message_id": msg.get("message_id", "")})

@@ -2,7 +2,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
 import secrets
 from datetime import datetime, timezone
 from typing import Callable, Awaitable

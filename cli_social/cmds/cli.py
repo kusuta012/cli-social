@@ -6,7 +6,6 @@ from cli_social.identity import (
     generate_identity,
     load_identity,
     identity_exists,
-    DEFAULT_KEY_FILE,
     _key_file_for
 )
 import json
@@ -90,7 +89,7 @@ def init(data_dir):
     key_path = str(key_file).replace(str(Path.home()), "~")
     if identity_exists(key_file):
         click.echo(f"Identity already exists at {key_file}")
-        click.echo(f"Delete it mannually if you want to start new (you will lose your account tho, be careful)")
+        click.echo("Delete it mannually if you want to start new (you will lose your account tho, be careful)")
         return
 
     click.echo("Creating a new identity..\n")
@@ -110,11 +109,11 @@ def init(data_dir):
     click.echo("\n Deriving key for you (this takes a few seconds) be patient.")
     peer_id = generate_identity(passphrase, username, key_file)
     
-    click.echo(f"\n Identity created")
+    click.echo("\n Identity created")
     click.echo(f"   Username : {username or '(none)'}")
     click.echo(f"   Peer ID  : {peer_id}")
     click.echo(f"   Key File : {key_path}")
-    click.echo(f"\n Remember your passphrase, there is no recovery")
+    click.echo("\n Remember your passphrase, there is no recovery")
     
 @main.command()
 @DATA_DIR_OPTION
@@ -185,7 +184,7 @@ def daemon(port, dht_port, bootstrap, data_dir):
         click.echo(f"Daemon running on port {port}")
         click.echo(f"DHT port {dht_port}")
         click.echo(f"Peer ID {peer_id[:16]}....{peer_id[-8:]}")
-        click.echo(f"Press Ctrl+C to stop")
+        click.echo("Press Ctrl+C to stop")
         try:
             await d.run_forever()
         except (KeyboardInterrupt, asyncio.CancelledError):

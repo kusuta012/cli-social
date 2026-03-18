@@ -35,10 +35,10 @@ async def fetch_and_vrfy_registry(dht_payload: str | None, accept_community: boo
             registry_data = json.loads(dht_payload)
             logger.info("loaded registry from DHT")
         except json.JSONDecodeError:
-            logger.warning(f"not a valid json received from DHT")
+            logger.warning("not a valid json received from DHT")
     
     if not registry_data:
-        logger.info(f"fetching registry from github")    
+        logger.info("fetching registry from github")    
         def _fetch():
             req = urllib.request.Request(REGISTRY_URL, headers={'User-Agent': 'cli-social-node/1.0'})
             with urllib.request.urlopen(req, timeout=10) as resp:
