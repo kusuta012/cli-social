@@ -75,4 +75,4 @@ jobs:
           docker manifest create ghcr.io/${{ github.repository_owner }}/sxcl:latest \
             --amend ghcr.io/${{ github.repository_owner }}/sxcl:amd64 \
             --amend ghcr.io/${{ github.repository_owner }}/sxcl:arm64
-          docker manifest push gh
+          docker manifest push ghcr.io/${{ github.repository_owner }}/sxcl:latest
