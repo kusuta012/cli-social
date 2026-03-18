@@ -13,8 +13,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      
-      # THIS STEP FIXES THE "DRIVER" ERROR
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -24,17 +23,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Build and push AMD64
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/sxcl:amd64
-            ghcr.io/${{ github.repository_owner }}/sxcl:latest 
+          tags: ghcr.io/${{ github.repository_owner }}/sxcl:amd64
           build-args: BUILD_ID=${{ github.run_id }}
-          # Removed the complex cache-to/from to prevent driver errors
 
   build-arm64:
     runs-on: [self-hosted, arm64, linux]
@@ -43,8 +39,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      
-      # THIS STEP FIXES THE "DRIVER" ERROR
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -54,7 +49,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Build and push ARM64
         uses: docker/build-push-action@v6
         with:
@@ -80,4 +75,4 @@ jobs:
           docker manifest create ghcr.io/${{ github.repository_owner }}/sxcl:latest \
             --amend ghcr.io/${{ github.repository_owner }}/sxcl:amd64 \
             --amend ghcr.io/${{ github.repository_owner }}/sxcl:arm64
-          docker manifest push ghcr.io/${{ github.repository_owner }}/sxcl:latest
+          docker manifest push gh
