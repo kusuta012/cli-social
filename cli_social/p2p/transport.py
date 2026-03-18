@@ -77,7 +77,7 @@ async def _do_handshake_responder(
 
 
 async def encrypt_for_offline(our_peer_id: str, our_private_key: bytes, their_pubkey: bytes, content: str, client_message_id: str):
-    noise = NoiseConnection.from_name(b"Noise_XX_25519_ChaChaPoly_SHA256")
+    noise = NoiseConnection.from_name(b"Noise_X_25519_ChaChaPoly_SHA256")
     noise.set_as_initiator()
     noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private_key)
     noise.set_keypair_from_public_bytes(Keypair.REMOTE_STATIC, their_pubkey)
@@ -93,7 +93,7 @@ async def encrypt_for_offline(our_peer_id: str, our_private_key: bytes, their_pu
     return bytes(encrypted_message)
 
 async def decrypt_offline_message(our_private_key: bytes, encrypted_blob: bytes) -> dict:
-    noise = NoiseConnection.from_name(b"Noise_XX_25519_ChaChaPoly_SHA256")
+    noise = NoiseConnection.from_name(b"Noise_X_25519_ChaChaPoly_SHA256")
     noise.set_as_responder()
     noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private_key)
     noise.start_handshake()

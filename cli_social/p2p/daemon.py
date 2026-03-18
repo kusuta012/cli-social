@@ -56,6 +56,7 @@ class Daemon:
         self._relay_writer: asyncio.StreamWriter | None = None
         self._relay_task: asyncio.Task | None = None
         self._relay_session_tasks: set[asyncio.Task] = set()
+        self._bg_tasks: set[asyncio.Task] = set()
         self._recent_message_ids = deque(maxlen=200)
         self.noise_pubkey_hex = ""
 
@@ -76,8 +77,12 @@ class Daemon:
         )
         await self._dht.start()
         self._running = True
-        asyncio.create_task(self._run_p2p_server())
-        asyncio.create_task(self._run_relay_mngr())
+        t1 = asyncio.create_task(self._run_p2p_server())
+        t2 = asyncio.create_task(self._run_relay_mngr())
+        self._bg_tasks.add(t1)
+        self._bg_tasks.add(t2)
+        t1.add_done_callback(self._bg_tasks.discard)
+        t2.add_done_callback(self._bg_tasks.discard)
         if self.relay_host:
             await self._connect_to_relay()
         else:

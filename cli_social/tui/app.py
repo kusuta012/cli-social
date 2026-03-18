@@ -317,7 +317,7 @@ class CLISocialApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self.run_worker(self._start_daemon, thread=True)
+        self.run_worker(self._start_daemon)
         await self._load_conversations()
         self.set_focus(self.query_one("#conversation-list"))
 
@@ -558,10 +558,10 @@ class CLISocialApp(App):
                 if item.peer_id == peer_id:
                     username = item.username or peer_id[:10]
                     break
-            self.call_from_thread(chat.append_message, content, username, now, False)
+            self.call_next(chat.append_message, content, username, now, False)
         else:
             self.call_from_thread(self.notify, f"New message from {peer_id[:12]}....")
-        self.call_from_thread(self._load_conversations)
+        self.call_next(self._load_conversations)
 
     async def _presence_refresh(self) -> None:
         while True:
