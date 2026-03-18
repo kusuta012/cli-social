@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Optional
 import aiosqlite
@@ -58,7 +59,10 @@ class Storage:
         async with db.execute("PRAGMA table_info(messages)") as cursor:
             columns = [row["name"] for row in await cursor.fetchall()]
             if "client_message_id" not in columns:
-                await db.execute("ALTER TABLE messages ADD column client_message_id TEXT")
+                try:
+                    await db.execute("ALTER TABLE messages ADD column client_message_id TEXT")
+                except aiosqlite.OperationalError:
+                    logging.error("no problem pookie")
         await db.commit()
         return cls(db)
     
