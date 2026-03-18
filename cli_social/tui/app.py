@@ -470,15 +470,23 @@ class CLISocialApp(App):
                 break
 
             except PeerOfflineError as e:
-                self.notify("Peer is offline, storing to forward later") # todo remove this 
                 try:
-                    assert self._daemon._dht, "DHT not running"
-                    peer_info = await self._daemon._dht.lookup(peer_id) 
-                    if not peer_info or not peer_info.noise_pubkey_hex:
-                        raise ValueError(
-                            "could not find peer's public key in DHT for offline messaging"
-                        )
-                    their_pubkey = bytes.fromhex(peer_info.noise_pubkey_hex)
+                    async with await Storage.open(self.db_path) as s:
+                        pubkey_hex = await s.get_contact_pubkey(peer_id)
+
+                    if not pubkey_hex:
+                        self.notify("Forwading... (dht lookup)", severity="information")
+                        assert self._daemon._dht, "DHT not running"
+                        peer_info = await self._daemon._dht.lookup(peer_id) 
+                        if not peer_info or not peer_info.noise_pubkey_hex:
+                            raise ValueError(
+                                "could not find peer's public key in DHT for offline messaging"
+                            )
+                        pubkey_hex = peer_info.noise_pubkey_hex
+                        async with await Storage.open(self.db_path) as s:
+                            await s.update_contact_pubkey(peer_id, pubkey_hex)
+
+                    their_pubkey = bytes.fromhex(pubkey_hex)
                     encrypt_blob = await encrypt_for_offline(
                         self.peer_id,
                         self.private_key,

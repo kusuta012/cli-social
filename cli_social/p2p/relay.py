@@ -4,8 +4,9 @@ import json
 import logging
 import secrets
 import socket
-from cli_social.p2p.utils import read_frame, write_frame
+
 from cli_social.p2p.registry import fetch_and_vrfy_registry
+from cli_social.p2p.utils import read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,11 @@ class RelayServer:
             logger.debug(f"failed to connect to {host}:{port}, {e}")
         finally:
             self._pending_dials.discard(targ_id)
+            rem_id = locals().get('remote_relay_id')
+            if rem_id: 
+                for pid, rid in list(self._mesh_presence.items()):
+                    if rid == rem_id:
+                        self._mesh_presence.pop(pid, None)
             if conn:
                 for rid, c in list(self._mesh_conns.items()):
                     if c is conn:
@@ -251,6 +257,9 @@ class RelayServer:
                 except Exception:
                     pass
                 finally:
+                    for pid, rid in list(self._mesh_presence.items()):
+                        if rid == remote_relay_id:
+                            self._mesh_presence.pop(pid, None)
                     self._mesh_conns.pop(remote_relay_id, None)
                     conn.close()
                 return
@@ -336,6 +345,10 @@ class RelayServer:
                 pipe_conn = await asyncio.wait_for(future, timeout=PIPE_TIMEOUT)
                 await sender.send_msg({"type": "ok"})
                 await self._pipe(sender, pipe_conn) # too many logs , needed for debugging :)
+            except asyncio.TimeoutError:
+                logger.warning(f"sender {sender.peer_id[:8]} timedout sending payload")
+            except asyncio.IncompleteReadError:
+                logger.info(f"sender {sender.peer_id[:8]} aborted before sending payload")
             except Exception as e:
                 logger.error(f"connect error {e}")
                 await sender.send_msg({"type": "error", "reason": str(e)})
@@ -356,6 +369,8 @@ class RelayServer:
                     logger.info(f"forwarded to {remote_relay_id}")
                 except asyncio.TimeoutError:
                     logger.warning(f"sender {sender.peer_id[:8]} timedout sending payload ")
+                except asyncio.IncompleteReadError:
+                    logger.info(f"sender {sender.peer_id[:8]} aborted during mesh delivery")
                 except Exception as e:
                     logger.error(f"mesh fowarding error {e}")
                 return 
@@ -367,6 +382,8 @@ class RelayServer:
                 logger.debug(f"stored payload for offline peer {target_peer_id[:12]}")
             except asyncio.TimeoutError:
                 pass
+            except asyncio.IncompleteReadError:
+                logger.info(f"sender {sender.peer_id[:8]} aborted during local storage")
 
     async def _pipe(self, a: RelayConnection, b: RelayConnection) -> None:
         async def forward(src: RelayConnection, dst: RelayConnection) -> None:
