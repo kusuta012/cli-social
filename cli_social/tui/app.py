@@ -195,6 +195,7 @@ class ChatPane(Vertical):
         is_outgoing: bool,
         delivered: bool = False,
         message_id: int = -1,
+        client_message_id: str = ""
     ) -> MessageBubble:
         scroll = self.query_one("#message-scroll", ScrollableContainer)
         bubble = MessageBubble(
@@ -204,6 +205,7 @@ class ChatPane(Vertical):
             is_outgoing=is_outgoing,
             delivered=delivered,
             message_id=message_id,
+            client_message_id=client_message_id
         )
         await scroll.mount(bubble)
         scroll.scroll_end(animate=True)
