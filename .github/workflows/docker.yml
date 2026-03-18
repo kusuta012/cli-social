@@ -37,7 +37,7 @@ jobs:
           # Removed the complex cache-to/from to prevent driver errors
 
   build-arm64:
-    runs-on: ubuntu-24.04-arm64
+    runs-on: [self-hosted, arm64, linux]
     permissions:
       contents: read
       packages: write
