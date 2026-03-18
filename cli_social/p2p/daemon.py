@@ -81,8 +81,13 @@ class Daemon:
         logger.info(f"p2p listening on {self.listen_port}")
         self._running = True
         t1 = asyncio.create_task(self._server.serve_forever())
-        t2 = asyncio.create_task(self._run_relay_mngr())
         self._bg_tasks.add(t1)
+        if self.relay_host:
+            await self._connect_to_relay()
+        else:
+            await self._discover_and_connect_relay()
+            
+        t2 = asyncio.create_task(self._run_relay_mngr())
         self._bg_tasks.add(t2)
         t1.add_done_callback(self._bg_tasks.discard)
         t2.add_done_callback(self._bg_tasks.discard)
@@ -105,22 +110,21 @@ class Daemon:
             await self._server.serve_forever()
 
     async def _run_relay_mngr(self):
-        if self.relay_host:
-            await self._connect_to_relay()
-        else:
             is_first_run = True
             while self._running:
-                if is_first_run and self.cached_relay:
-                    self.relay_host = self.cached_relay["host"]
-                    self.relay_port = self.cached_relay["port"]
-                    try:
-                        await asyncio.wait_for(self._connect_to_relay(), timeout=3)
-                    except Exception:
-                        self.relay_host = None
-                        self.cached_relay = None
-
                 if not self._relay_writer:
-                    await self._discover_and_connect_relay()
+                    if self.relay_host:
+                        await self._connect_to_relay()
+                    elif is_first_run and self.cached_relay:
+                        self.relay_host = self.cached_relay["host"]
+                        self.relay_port = self.cached_relay["port"]
+                        try:
+                            await asyncio.wait_for(self._connect_to_relay(), timeout=3)
+                        except Exception:
+                            self.relay_host = None
+                            self.cached_relay = None
+                    else:
+                        await self._discover_and_connect_relay()
 
                 if self._relay_writer:
                     is_first_run = False
