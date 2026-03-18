@@ -6,7 +6,9 @@ import time
 import traceback
 from collections import deque
 from pathlib import Path
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Self
+
+from textual.reactive import await_watcher
 from cli_social.p2p.transport import accept, NoiseSession
 from cli_social.p2p.dht import DHTNode
 from cli_social.storage import Storage, DEFAULT_DB_PATH
@@ -76,8 +78,10 @@ class Daemon:
             bootstrap_nodes=self.bootstrap_nodes,
         )
         await self._dht.start()
+        self._server = await asyncio.start_server(self._handle_connection, "0.0.0.0", self.listen_port)
+        logger.info(f"p2p listening on {self.listen_port}")
         self._running = True
-        t1 = asyncio.create_task(self._run_p2p_server())
+        t1 = asyncio.create_task(self._server.serve_forever())
         t2 = asyncio.create_task(self._run_relay_mngr())
         self._bg_tasks.add(t1)
         self._bg_tasks.add(t2)

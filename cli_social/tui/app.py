@@ -323,7 +323,7 @@ class CLISocialApp(App):
 
     async def _start_daemon(self) -> None:
         self.notify("Starting daemon, this may take a while", title="System", severity="information", timeout=3)
-        self.call_from_thread(self.query_one(ChatPane).set_status, "connecting")
+        self.query_one(ChatPane).set_status("connecting")
         try:
             self._daemon = Daemon(
                 peer_id=self.peer_id,
@@ -346,10 +346,10 @@ class CLISocialApp(App):
                 self._presence_task = asyncio.create_task(
                     self._presence_refresh(), name="presence_refresh"
                 )
-            self.call_from_thread(self.notify, f"Daemon up! | port {self.listen_port}", severity ="information", timeout=3)
+            self.notify (f"Daemon up! | port {self.listen_port}", severity ="information", timeout=3)
         except Exception as e:
-            self.call_from_thread(self.notify, f"Daemon failed to start: {e}", severity="error", timeout=8)
-            self.call_from_thread(self.query_one(ChatPane).set_status, "error")
+            self.notify(f"Daemon failed to start: {e}", severity="error", timeout=8)
+            self.query_one(ChatPane).set_status("error")
 
     async def _load_conversations(self) -> None:
         async with await Storage.open(self.db_path) as s:
@@ -560,7 +560,7 @@ class CLISocialApp(App):
                     break
             self.call_next(chat.append_message, content, username, now, False)
         else:
-            self.call_from_thread(self.notify, f"New message from {peer_id[:12]}....")
+            self.notify(f"New message from {peer_id[:12]}....")
         self.call_next(self._load_conversations)
 
     async def _presence_refresh(self) -> None:
