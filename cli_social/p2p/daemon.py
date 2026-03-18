@@ -6,9 +6,8 @@ import time
 import traceback
 from collections import deque
 from pathlib import Path
-from typing import Callable, Awaitable, Self
+from typing import Callable, Awaitable
 
-from textual.reactive import await_watcher
 from cli_social.p2p.transport import accept, NoiseSession
 from cli_social.p2p.dht import DHTNode
 from cli_social.storage import Storage, DEFAULT_DB_PATH
@@ -87,11 +86,6 @@ class Daemon:
         self._bg_tasks.add(t2)
         t1.add_done_callback(self._bg_tasks.discard)
         t2.add_done_callback(self._bg_tasks.discard)
-        if self.relay_host:
-            await self._connect_to_relay()
-        else:
-            await self._discover_and_connect_relay()
-
         hm_str = f"{self.relay_host}:{self.relay_port}" if self.relay_host else ""
         await self._dht.announce(
             username=self.username,
