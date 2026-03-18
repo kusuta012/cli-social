@@ -10,6 +10,8 @@ from cli_social.identity import (
 )
 import json
 import time
+import platformdirs
+import logging
 from cli_social.storage import db_path_for
 from cli_social.p2p.daemon import Daemon
 from cli_social.p2p.dht import DHTNode
@@ -130,10 +132,12 @@ def whoami(data_dir):
 @click.option("--bootstrap", multiple=True, help="bootstrap nodes as host:port")
 @click.option("--relay", default=None, help="relay node as host:port")
 def tui(dht_port, bootstrap, relay, data_dir):
-    import logging
+
+    log_dir = Path(platformdirs.user_log_dir("cli-social"))
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
-    filename=f"{data_dir or Path.home() / '.cli-social'}/debug.log",
+    filename=str(Path(data_dir or log_dir) / "debug.log"),
     level=logging.DEBUG,
     format="%(asctime)s %(name)s %(levelname)s %(message)s"
     )

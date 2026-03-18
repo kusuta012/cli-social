@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import secrets
+import platformdirs
 from pathlib import Path
 from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -18,7 +19,7 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat
 )
 
-DEFAULT_KEY_FILE = Path.home() / ".cli-social" / "identity.enc"
+DEFAULT_KEY_FILE = Path(platformdirs.user_config_dir("cli-social")) / "identity.enc"
 ARGON2_TIME_COST = 3
 ARGON2_MEM_COST = 65536
 ARGON2_PARALLELISM = 2

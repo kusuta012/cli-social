@@ -7,13 +7,12 @@ import traceback
 from collections import deque
 from pathlib import Path
 from typing import Callable, Awaitable
-
-from cli_social.p2p.transport import accept, NoiseSession
+from cli_social.p2p.transport import encrypt_blob
 from cli_social.p2p.dht import DHTNode
 from cli_social.storage import Storage, DEFAULT_DB_PATH
 from cli_social.p2p.utils import read_frame, write_frame
 from cli_social.p2p.registry import fetch_and_vrfy_registry
-from cli_social.p2p.transport import decrypt_offline_message
+from cli_social.p2p.transport import decrypt_blob
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 MessageCallback = Callable[[str, str], Awaitable[None]]
-
+StatusCallback = Callable[[str, str], Awaitable[None]]
 
 class Daemon:
     def __init__(
@@ -29,10 +28,10 @@ class Daemon:
         peer_id: str,
         private_key: bytes,
         username: str = "",
-        listen_port: int = 53241,
         dht_port: int = 6969,
         bootstrap_nodes: list[tuple[str, int]] | None = None,
         on_message: MessageCallback | None = None,
+        status_callback: StatusCallback | None = None,
         db_path: Path | None = None,
         relay_host: str | None = None,
         relay_port: int | None = None,
@@ -41,25 +40,25 @@ class Daemon:
         self.peer_id = peer_id
         self.private_key = private_key
         self.username = username
-        self.listen_port = listen_port
         self.dht_port = dht_port
         self.bootstrap_nodes = bootstrap_nodes or []
         self.on_message = on_message
+        self.status_callback = status_callback
         self.db_path = db_path
         self.relay_host = relay_host
         self.relay_port = relay_port
         self.cached_relay = cached_relay
-        self._server: asyncio.Server | None = None
         self._dht: DHTNode | None = None
         self._storage: Storage | None = None
         self._running = False
         self._relay_reader: asyncio.StreamReader | None = None
         self._relay_writer: asyncio.StreamWriter | None = None
         self._relay_task: asyncio.Task | None = None
-        self._relay_session_tasks: set[asyncio.Task] = set()
         self._bg_tasks: set[asyncio.Task] = set()
         self._recent_message_ids = deque(maxlen=200)
         self.noise_pubkey_hex = ""
+        
+
 
     # coding this at 1am , I need caffeine !!
     async def start(self) -> None:
@@ -77,37 +76,33 @@ class Daemon:
             bootstrap_nodes=self.bootstrap_nodes,
         )
         await self._dht.start()
-        self._server = await asyncio.start_server(self._handle_connection, "0.0.0.0", self.listen_port)
-        logger.info(f"p2p listening on {self.listen_port}")
         self._running = True
-        t1 = asyncio.create_task(self._server.serve_forever())
-        self._bg_tasks.add(t1)
         if self.relay_host:
             await self._connect_to_relay()
         else:
             await self._discover_and_connect_relay()
             
-        t2 = asyncio.create_task(self._run_relay_mngr())
-        self._bg_tasks.add(t2)
-        t1.add_done_callback(self._bg_tasks.discard)
-        t2.add_done_callback(self._bg_tasks.discard)
+        t_mngr = asyncio.create_task(self._run_relay_mngr())
+        self._bg_tasks.add(t_mngr)
+        t_mngr.add_done_callback(self._bg_tasks.discard)
         hm_str = f"{self.relay_host}:{self.relay_port}" if self.relay_host else ""
         await self._dht.announce(
             username=self.username,
             noise_pubkey_hex=self.noise_pubkey_hex,
             home_relay=hm_str,
         )
-        logger.info("Daemon startup intiated in the backgreound")
-        logger.info(f"peer id {self.peer_id[:16]}.....{self.peer_id[-8:]}")
+        
+    async def _on_message(self, peer_id: str, content: str, client_message_id: str | None = None) -> None:
+        if client_message_id:
+            if client_message_id in self._recent_message_ids:
+                return
+            self._recent_message_ids.append(client_message_id)
+        if self._storage:
+            await self._storage.save_message(peer_id=peer_id, sender_peer_id=peer_id, content=content, is_outgoing=False)
+        if self.on_message:
+            await self.on_message(peer_id, content)
 
-    # Idk how but on every night coding session I end up in this file
-    async def _run_p2p_server(self):
-        self._server = await asyncio.start_server(
-            self._handle_connection, "0.0.0.0", self.listen_port
-        )
-        logger.info(f"p2p server listening on {self.listen_port}")
-        async with self._server:
-            await self._server.serve_forever()
+    # Idk how but on every night coding session I end up in this file , fr bruh, also HI reviewer I know you are going to read this comment, can you please do me a favor to dm me on slack @speedhawks , pls ?? uwu :3
 
     async def _run_relay_mngr(self):
             is_first_run = True
@@ -138,6 +133,29 @@ class Daemon:
                     await asyncio.sleep(60)
                 else:
                     await asyncio.sleep(30)
+    
+    async def send_chat_msg(self, target_peer_id: str, content: str, client_msg_id: str) -> None:
+        if not self._relay_writer:
+            raise ConnectionError("Not connected to relay network")
+        
+        pubkey_hex = ""
+        if self._storage:
+            pubkey_hex = await self._storage.get_contact_pubkey(target_peer_id)
+        
+        if not pubkey_hex and self._dht:
+            peer_info = await self._dht.lookup(target_peer_id)
+            if peer_info:
+                pubkey_hex = peer_info.noise_pubkey_hex
+                if self._storage:
+                    await self._storage.update_contact_pubkey(target_peer_id, pubkey_hex)
+        
+        if not pubkey_hex:
+            raise ValueError("target public key unknown")
+        
+        encrypted_blob = await encrypt_blob(self.peer_id, self.private_key, bytes.fromhex(pubkey_hex), content, client_msg_id)
+        msg = {"type": "publish", "to": target_peer_id, "payload": encrypted_blob.hex(), "message_id": client_msg_id}
+        await write_frame(self._relay_writer, json.dumps(msg).encode())
+        logger.debug(f"pushed packet {client_msg_id[:8]} to relay for {target_peer_id}")
 
     async def _connect_to_relay(self) -> None:
         try:
@@ -171,77 +189,35 @@ class Daemon:
                 msg = json.loads(await read_frame(reader))
                 msg_type = msg.get("type")
 
-                if msg_type == "incoming":
-                    from_peer_id = msg.get("from", "unknown")
-                    session_id = msg.get("session_id", "")
-                    logger.info(
-                        f"incoming relay conn from {from_peer_id[:12]}, session {session_id[:8]}"
-                    )
+                if msg_type == "push":
+                    sender_id = msg.get("from")
+                    payload_hex = msg.get("payload")
+                    client_msg_id = msg.get("message_id")
 
                     try:
-                        pipe_reader, pipe_writer = await asyncio.open_connection(
-                            self.relay_host, self.relay_port
-                        )
-                        await write_frame(
-                            pipe_writer,
-                            json.dumps(
-                                {"type": "pipe", "session_id": session_id}
-                            ).encode(),
-                        )
-                        ack = json.loads(await read_frame(pipe_reader))
-                        if ack.get("type") != "ok":
-                            logger.error(f"pipe conn rejected {ack.get('reason')}")
-                            pipe_writer.close()
-                            continue
-
-                        session = await accept(
-                            reader=pipe_reader,
-                            writer=pipe_writer,
-                            our_peer_id=self.peer_id,
-                            our_private_key=self.private_key,
-                            remote_peer_id=from_peer_id,
-                        )
-
-                        async def _msg_handler(
-                            peer_id: str,
-                            content: str,
-                            message_id: int,
-                            _session=session,
-                        ) -> None:
-                            await self._on_message(peer_id, content, _session)
-
-                        task = asyncio.create_task(
-                            session.listen(_msg_handler, on_receipt=None),
-                            name=f"relay_session_{from_peer_id[:12]}",
-                        )
-                        self._relay_session_tasks.add(task)
-                        task.add_done_callback(self._relay_session_tasks.discard)
-
+                        decrypted = await decrypt_blob(self.private_key, bytes.fromhex(payload_hex))
+                        await self._on_message(sender_id, decrypted["content"], client_msg_id)
+                        ack = {"type": "client_ack", "to": sender_id, "message_id": client_msg_id}
+                        await write_frame(writer, json.dumps(ack).encode())
                     except Exception as e:
-                        logger.error(
-                            f"failed to open pipe for {session_id[:8]}, err = {e}"
-                        )
-
+                        logger.error(f"failed to process push, {e}")
+                elif msg_type == "relay_ack":
+                    msg_id = msg.get("message_id")
+                    if self.status_callback:
+                        await self.status_callback(msg_id, "relayed")
+                elif msg_type == "delivery_ack":
+                    msg_id = msg.get("message_id")
+                    if self._storage:
+                        await self._storage.mark_delivered(msg_id)
+                    if self.status_callback:
+                        await self.status_callback(msg_id, "delivered")                      
                 elif msg_type == "stored_message":
-                    logger.info("Received a stored msg from relay")
+                    payload_hex = msg.get("payload")
                     try:
-                        payload_bytes = bytes.fromhex(msg["payload"])
-                        decrypted_msg = await decrypt_offline_message(
-                            self.private_key, payload_bytes
-                        )
-                        sender_peer_id = decrypted_msg.get(
-                            "peer_id", "unknown-offline-sender"
-                        )
-                        await self._on_message(
-                            sender_peer_id,
-                            decrypted_msg["content"],
-                            None,
-                            decrypted_msg.get("client_message_id"),
-                        )
-                        logger.info("successfully processed stored msg")
+                        decrypted = await decrypt_blob(self.private_key, bytes.fromhex(payload_hex))
+                        await self._on_message(peer_id=decrypted.get("sender_id", "unknown"), content=decrypted["content"], client_message_id=decrypted.get("message_id"))
                     except Exception as e:
-                        logger.error(f"Failed to decrypt stored message {e}")
-
+                        logger.error(f"failed to decrypt stored msg, {e}")
                 elif msg_type == "ping":
                     logger.debug("relay keepalive ping")
                     await write_frame(writer, json.dumps({"type": "pong"}).encode())
@@ -261,10 +237,8 @@ class Daemon:
                 await self._connect_to_relay()
 
     async def run_forever(self) -> None:
-        if self._server is None:
-            raise RuntimeError("call start first, dumbb")
-        async with self._server:
-            await self._server.serve_forever()
+        while self._running:
+            await asyncio.sleep(1)
 
     async def stop(self) -> None:
         self._running = False
@@ -274,78 +248,12 @@ class Daemon:
             task.cancel()
         if self._relay_writer:
             self._relay_writer.close()
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
         if self._dht:
             await self._dht.stop()
         if self._storage:
             await self._storage.close()
         logger.info("dameon stopped")
 
-    async def _handle_connection(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        peer_addr = writer.get_extra_info("peername")
-        logger.info(f"incoming from {peer_addr}")
-
-        try:
-            session: NoiseSession = await accept(
-                reader=reader,
-                writer=writer,
-                our_peer_id=self.peer_id,
-                our_private_key=self.private_key,
-            )
-            logger.info(f"handhshake completed {peer_addr}")
-
-            async def _msg_handler(
-                peer_id: str,
-                content: str,
-                message_id: int,
-                _session: NoiseSession = session,
-            ) -> None:
-                await self._on_message(peer_id, content, session)
-
-            await session.listen(_msg_handler, on_receipt=None)
-
-        except Exception as e:
-            logger.error(f"connection from {peer_addr} failed {e}")
-        finally:
-            writer.close()
-
-    async def _on_message(
-        self,
-        peer_id: str,
-        content: str,
-        session: NoiseSession | None,
-        client_message_id: str | None = None,
-    ) -> None:
-        if client_message_id:
-            if client_message_id in self._recent_message_ids:
-                logger.debug(
-                    f"Duplicate msg {client_message_id[:8]} from {peer_id[:8]} dropped"
-                )
-                return
-            self._recent_message_ids.append(client_message_id)
-
-        message_id = -1
-        if self._storage:
-            message_id = await self._storage.save_message(
-                peer_id=peer_id,
-                sender_peer_id=peer_id,
-                content=content,
-                is_outgoing=False,
-            )
-
-        if session:
-            try:
-                await session.send_receipt(message_id)
-                logger.debug(f"sent receipt {message_id} to {peer_id[:12]}")
-            except Exception as e:
-                logger.warning(f"failed to send receipt: {e}")
-
-        if self.on_message:
-            await self.on_message(peer_id, content)
 
     async def _discover_and_connect_relay(self) -> None:
 

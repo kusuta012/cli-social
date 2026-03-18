@@ -19,3 +19,5 @@ operator.md
 relay.md
 docker-compose.yml
 publish_reg.py
+*.ruff-cache/
+*.vscode

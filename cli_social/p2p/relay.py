@@ -2,7 +2,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
 import socket
 
 from cli_social.p2p.registry import fetch_and_vrfy_registry
@@ -11,7 +10,6 @@ from cli_social.p2p.utils import read_frame, write_frame
 logger = logging.getLogger(__name__)
 
 STORE_MAX_MESSAGES = 100
-PIPE_TIMEOUT = 60
 MAX_CONCURRENT_CONN = 500
 
 
@@ -62,7 +60,6 @@ class RelayServer:
         self._online: dict[str, RelayConnection] = {}
         self._store: dict[str, list[bytes]] = {}
         self._server: asyncio.Server | None = None
-        self._pending_pipes: dict[str, asyncio.Future[RelayConnection]] = {}
         self._mesh_conns: dict[str, RelayConnection] = {}
         self._mesh_presence: dict[str, str] = {}
         self._mesh_task: asyncio.Task | None = None
@@ -192,36 +189,23 @@ class RelayServer:
         elif msg_type == "mesh_remove" and peer_id:
             self._mesh_presence.pop(peer_id, None)
         elif msg_type == "mesh_forward":
-            to_peer = msg.get("to_peer")
+            target_id = msg.get("to")
+            from_id = msg.get("from")
             payload_hex = msg.get("payload")
-            if not to_peer or not payload_hex:
-                return
-            
-            local_target = self._online.get(to_peer)
-            if local_target and local_target.alive:
-                try:
-                    await local_target.send_msg({"type": "stored_message", "payload": payload_hex})
-                    logger.info(f"delivered mesh msg to local peer {to_peer[:8]}")
-                except Exception as e:
-                    logger.error(f"failed to deliver mesh msg to local peer {to_peer[:8]}, {e}")
+            msg_id = msg.get("message_id")
+            target = self._online.get(target_id)
+            if target and target.alive:
+                await target.send_msg({"type": "push", "from": from_id, "payload": payload_hex, "message_id": msg_id})
             else:
-                logger.warning(f"target {to_peer[:8]} offline , storing!")
-                self._store_payload(to_peer, bytes.fromhex(payload_hex))
-        elif msg_type == "mesh_fetch":
-            fetch_peer = msg.get("peer_id")
-            requesting_relay = msg.get("relay_id")
-            if fetch_peer and requesting_relay:
-                remote_conn = self._mesh_conns.get(requesting_relay)
-                if remote_conn and fetch_peer in self._store:
-                    logger.info(f"relay {requesting_relay} is pulling offline msgs for {fetch_peer[:8]}")
-                    messages = self._store.pop(fetch_peer,[])
-                    for stored_payload in messages:
-                        try:
-                            await remote_conn.send_msg({"type": "mesh_forward", "to_peer": fetch_peer, "payload": stored_payload.hex()})
-                        except Exception:
-                            self._store.setdefault(fetch_peer,[]).insert(0, stored_payload)
-                            break
-
+                self._store_payload(target_id, bytes.fromhex(payload_hex))
+        elif msg_type == "mesh_ack":
+            target_id = msg.get("to")
+            from_id = msg.get("from")
+            msg_id = msg.get("message_id")
+            target = self._online.get(target_id)
+            if target:
+                await target.send_msg({"type": "delivery_ack", "from": from_id, "message_id": msg_id})
+        
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer_addr = writer.get_extra_info("peername")
         
@@ -238,42 +222,7 @@ class RelayServer:
             msg_type = msg.get("type")
             
             if msg_type == "mesh_register":
-                remote_relay_id = msg.get("relay_id")
-                await _write_msg(writer, {"type": "mesh_ok", "relay_id": self.relay_id})
-                
-                if remote_relay_id == self.relay_id:
-                    return
-                
-                conn = RelayConnection(peer_id=peer_addr[0], reader=reader, writer=writer)
-                self._mesh_conns[remote_relay_id] = conn
-                
-                for local_peer in self._online.keys():
-                    await conn.send_msg({"type": "mesh_add", "peer_id": local_peer, "relay_id": self.relay_id})
-
-                try:
-                    while conn.alive:
-                        mesh_msg = await conn.receive_msg()
-                        await self._handle_mesh_message(mesh_msg)
-                except Exception:
-                    pass
-                finally:
-                    for pid, rid in list(self._mesh_presence.items()):
-                        if rid == remote_relay_id:
-                            self._mesh_presence.pop(pid, None)
-                    self._mesh_conns.pop(remote_relay_id, None)
-                    conn.close()
-                return
-            
-            if msg_type == "pipe":
-                session_id = msg.get("session_id", "")
-                future = self._pending_pipes.get(session_id)
-                if not future:
-                    await _write_msg(writer, {"type": "error", "reason": "unknown session_id"})
-                    return
-                pipe_conn = RelayConnection(peer_id=f"pipe_{session_id[:8]}", reader=reader, writer=writer)
-                await _write_msg(writer, {"type": "ok"})
-                future.set_result(pipe_conn)
-                await asyncio.Event().wait()
+                await self._handle_mesh_reg(msg, reader, writer, peer_addr)
                 return
             
             if msg_type != "register" or not msg.get("peer_id"):
@@ -281,126 +230,96 @@ class RelayServer:
                 return
 
             conn = RelayConnection(peer_id=msg["peer_id"], reader=reader, writer=writer)
-            conn.is_listener = msg.get("mode") == "listen"
-            
-            if conn.is_listener:
-                exist_conn = self._online.get(conn.peer_id)
-                if exist_conn:
-                    exist_conn.close()
-                self._online[conn.peer_id] = conn
-
-                self._broadcast_mesh({"type": "mesh_add", "peer_id": conn.peer_id, "relay_id": self.relay_id})
-                self._broadcast_mesh({"type": "mesh_fetch", "peer_id": conn.peer_id, "relay_id": self.relay_id})
-            
+            self._online[conn.peer_id] = conn
+            self._broadcast_mesh({"type": "mesh_add", "peer_id": conn.peer_id, "relay_id": self.relay_id})
             await conn.send_msg({"type": "ok"})
             await self._flush_stored(conn)
 
-            if conn.is_listener:
-                while conn.alive:
-                    await asyncio.sleep(60)
-                    try:
-                        await conn.send_msg({"type": "ping"})
-                        pong = await asyncio.wait_for(conn.receive_msg(), timeout=5)
-                        if pong.get("type") != "pong":
-                            break
-                    except Exception:
-                        break
-                return
+            while conn.alive:
+                try:
+                    action = await asyncio.wait_for(conn.receive_msg(), timeout=70)
+                    action_type = action.get("type")
 
-            action = await conn.receive_msg()
-            action_type = action.get("type")
-
-            if action_type == "connect":
-                await self._handle_connect(conn, action)
-            elif action_type == "fetch":
-                await self._flush_stored(conn)
-            else:
-                await conn.send_msg({"type": "error", "reason": f"unknown {action_type}"})
-        except asyncio.IncompleteReadError:
-            logger.info(f"peer {conn.peer_id[:12] if conn else peer_addr} disconnected")
-        except asyncio.TimeoutError:
-            logger.warning(f"peer {peer_addr} timedout during rgisteration")
-        except Exception as e:
-            logger.error(f"relay error for {conn.peer_id[:12] if conn else peer_addr} {e}")
+                    if action_type == "publish":
+                        await self._handle_publish(conn, action)
+                    elif action_type == "client_ack":
+                        await self._handle_client_ack(conn, action)
+                    elif action_type == "pong":
+                        continue
+                except asyncio.TimeoutError:
+                    await conn.send_msg({"type": "ping"})
+        except (asyncio.IncompleteReadError, ConnectionResetError):
+            logger.error(f"peer {conn.peer_id[:12] if conn else peer_addr} disconnected")
         finally:
-            if conn is not None and conn.is_listener:
-                if self._online.get(conn.peer_id) is conn:
-                    self._online.pop(conn.peer_id, None)
-                    self._broadcast_mesh({"type": "mesh_remove", "peer_id": conn.peer_id})
+            if conn:
+                self._online.pop(conn.peer_id, None)
+                self._broadcast_mesh({"type": "mesh_remove", "peer_id": conn.peer_id})
+                conn.close()
+    
+    async def _handle_publish(self, sender: RelayConnection, msg: dict) -> None:
+        target_id = msg.get("to")
+        payload = msg.get("payload")
+        msg_id = msg.get("message_id")
 
-    async def _handle_connect(self, sender: RelayConnection, msg: dict) -> None:
-        target_peer_id = msg.get("to")
-        if not target_peer_id:
-            await sender.send_msg({"type": "error", "reason": "missing target"})
-            return
-        target = self._online.get(target_peer_id)
-        if target and target.alive:
-            session_id = secrets.token_hex(8)
-            future: asyncio.Future[RelayConnection] = asyncio.get_event_loop().create_future()
-            self._pending_pipes[session_id] = future
-            
-            try:
-                await target.send_msg({"type": "incoming", "from": sender.peer_id, "session_id": session_id})
-                logger.info(f"notified {target.peer_id[:12]} of incoming from {sender.peer_id[:12]}")
-                pipe_conn = await asyncio.wait_for(future, timeout=PIPE_TIMEOUT)
-                await sender.send_msg({"type": "ok"})
-                await self._pipe(sender, pipe_conn) # too many logs , needed for debugging :)
-            except asyncio.TimeoutError:
-                logger.warning(f"sender {sender.peer_id[:8]} timedout sending payload")
-            except asyncio.IncompleteReadError:
-                logger.info(f"sender {sender.peer_id[:8]} aborted before sending payload")
-            except Exception as e:
-                logger.error(f"connect error {e}")
-                await sender.send_msg({"type": "error", "reason": str(e)})
-            finally:
-                self._pending_pipes.pop(session_id, None)
+        if not target_id or not payload:
             return
         
-        remote_relay_id = self._mesh_presence.get(target_peer_id)
+        target = self._online.get(target_id)
+        if target and target.alive:
+            await target.send_msg({"type": "push", "from": sender.peer_id, "payload": payload, "message_id": msg_id})
+            await sender.send_msg({"type": "relay_ack", "message_id": msg_id, "status": "relayed"})
+            return
+
+        remote_relay_id = self._mesh_presence.get(target_id)
         if remote_relay_id:
             remote_conn = self._mesh_conns.get(remote_relay_id)
             if remote_conn and remote_conn.alive:
-                logger.info(f"routing msg to {target_peer_id[:8]} via mesh relay {remote_relay_id}")
+                await remote_conn.send_msg({"type": "mesh_forward", "to": target_id, "from": sender.peer_id, "payload": payload, "message_id": msg_id})
+                await sender.send_msg({"type": "relay_ack", "message_id": msg_id, "status": "relayed"})
+                return
+        self._store_payload(target_id, bytes.fromhex(payload))
+        await sender.send_msg({"type": "relay_ack", "message_id": msg_id, "status": "relayed"})
+    
+    async def _handle_client_ack(self, sender: RelayConnection, msg: dict) -> None:
+        target_id = msg.get("to")
+        msg_id = msg.get("message_id")
+        if not target_id:
+            return
+        target = self._online.get(target_id)
+        if target:
+            await target.send_msg({"type": "delivery_ack", "from": sender.peer_id, "message_id": msg_id})
+        elif target_id in self._mesh_presence:
+            remote_relay_id = self._mesh_presence[target_id]
+            remote_conn = self._mesh_conns.get(remote_relay_id)
+            if remote_conn and remote_conn.alive:
+                await remote_conn.send_msg({"type": "mesh_ack", "to": target_id, "from": sender.peer_id, "message_id": msg_id })
 
-                await sender.send_msg({"type": "stored", "message_id": msg.get("message_id", "")})
-                try:
-                    payload = await asyncio.wait_for(sender.receive_raw(), timeout=PIPE_TIMEOUT)
-                    await remote_conn.send_msg({"type": "mesh_forward", "to_peer": target_peer_id, "payload": payload.hex()})
-                    logger.info(f"forwarded to {remote_relay_id}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"sender {sender.peer_id[:8]} timedout sending payload ")
-                except asyncio.IncompleteReadError:
-                    logger.info(f"sender {sender.peer_id[:8]} aborted during mesh delivery")
-                except Exception as e:
-                    logger.error(f"mesh fowarding error {e}")
-                return 
+    async def _handle_mesh_reg(self, msg: dict, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, addr: tuple) -> None:
+        remote_relay_id = msg.get("relay_id")
+        await _write_msg(writer, {"type": "mesh_ok", "relay_id": self.relay_id})
 
-            await sender.send_msg({"type": "stored", "message_id": msg.get("message_id", "")})
-            try:
-                payload = await asyncio.wait_for(sender.receive_raw(), timeout=PIPE_TIMEOUT)
-                self._store_payload(target_peer_id, payload)
-                logger.debug(f"stored payload for offline peer {target_peer_id[:12]}")
-            except asyncio.TimeoutError:
-                pass
-            except asyncio.IncompleteReadError:
-                logger.info(f"sender {sender.peer_id[:8]} aborted during local storage")
+        if remote_relay_id == self.relay_id:
+            return
+        
+        conn = RelayConnection(peer_id=addr[0], reader=reader, writer=writer)
+        self._mesh_conns[remote_relay_id] = conn
 
-    async def _pipe(self, a: RelayConnection, b: RelayConnection) -> None:
-        async def forward(src: RelayConnection, dst: RelayConnection) -> None:
-            try:
-                while src.alive and dst.alive:
-                    frame = await src.receive_raw()
-                    await dst.send_raw(frame)
-            except asyncio.IncompleteReadError:
-                pass
-            except Exception as e:
-                logger.error(f"pipe error {src.peer_id[:12]} > {dst.peer_id[:12]}, error {e}")
-            finally:
-                dst.close()
-                src.close()
-                
-        await asyncio.gather(forward(a, b), forward(b, a), return_exceptions=True)
+        for local_peer in self._online.keys():
+            await conn.send_msg({"type": "mesh_add", "peer_id": local_peer, "relay_id": self.relay_id})
 
+        try:
+            while conn.alive:
+                mesh_msg = await conn.receive_msg()
+                await self._handle_mesh_message(mesh_msg)
+        except Exception:
+            pass
+        finally:
+            for pid, rid in list(self._mesh_presence.items()):
+                if rid == remote_relay_id:
+                    self._mesh_presence.pop(pid, None)
+            self._mesh_conns.pop(remote_relay_id, None)
+            conn.close()
+        
     def _store_payload(self, peer_id: str, payload: bytes) -> None:
         queue = self._store.setdefault(peer_id, [])
         queue.append(payload)
@@ -425,7 +344,7 @@ class RelayServer:
                 wrap = {"type": "stored_message", "payload": msg.hex()}
                 await conn.send_msg(wrap)
             except Exception as e:
-                logger.error(f"faiiled to flush {conn.peer_id[:12], {e}}")
+                logger.error(f"failed to flush {conn.peer_id[:12], {e}}")
                 self._store[conn.peer_id] = messages[messages.index(msg):]
                 break
             

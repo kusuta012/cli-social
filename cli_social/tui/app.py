@@ -10,14 +10,10 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, Label
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from cli_social.storage import Storage, DEFAULT_DB_PATH
-from cli_social.p2p.transport import (
-    connect_via_relay,
-    PeerOfflineError,
-    encrypt_for_offline,
-)
 from cli_social.p2p.daemon import Daemon
-from cli_social.p2p.utils import write_frame
+
 
 
 logger = logging.getLogger(__name__)
@@ -31,21 +27,28 @@ class ConversationItem(ListItem):
         self.unread = unread
 
     def compose(self) -> ComposeResult:
-        unread_badge = f" ({self.unread})" if self.unread else ""
-        name = self.username or self.peer_id[:16] + "..."
-        yield Label(f" {name}{unread_badge}")
+        unread_badge = f" [bold red]({self.unread})[/bold red]" if self.unread else ""
+        name = self.username or self.peer_id[:12] + "..."
+        yield Label(f" {name}{unread_badge}", classes="convo-label")
 
 
 class Sidebar(Vertical):
     DEFAULT_CSS = """
     Sidebar {
-        width: 28;
-        border-right: solid $primary;
+        width: 30;
+        border-right: vkey $primary;
+        background: $panel;
     }
     #sidebar-title {
-        padding: 1;
+        padding: 1 2;
         text-style: bold;
         background: $boost;
+        width: 100%;
+        color: $text;
+        border-bottom: solid $primary;
+    }
+    .convo-label {
+        padding: 1 2;
     }
     """
 
@@ -55,16 +58,26 @@ class Sidebar(Vertical):
 class MessageBubble(Static):
     DEFAULT_CSS = """
     MessageBubble {
-        padding: 0 1;
-        margin: 0 0 1 0;
+        padding: 1 4;
+        margin: 0;
+        width: 100%;
+        layout: vertical;
     }
     MessageBubble.outgoing {
-        align: right middle;
         color: $success;
+        content-align: right top;
     }
     MessageBubble.incoming {
-        align: left middle;
+        content-align: left top;
         color: $text;
+    }
+    .msg-meta {
+        color: $text-muted;
+        text-style: bold italic;
+        margin-bottom: 1;
+    }
+    MessageBubble Label {
+        width: auto;
     }
     """
 
@@ -76,7 +89,9 @@ class MessageBubble(Static):
         is_outgoing: bool,
         delivered: bool = False,
         message_id: int = -1,
-    ) -> None:
+        client_message_id: str = "",
+        **kwargs
+    ):
         super().__init__()
         self.msg_content = content
         self.sender = sender
@@ -84,29 +99,43 @@ class MessageBubble(Static):
         self.is_outgoing = is_outgoing
         self.delivered = delivered
         self.message_id = message_id
+        self.client_message_id = client_message_id
+        self.status = "pending"
         self.add_class("outgoing" if is_outgoing else "incoming")
-
+    
     def compose(self) -> ComposeResult:
         time_str = self.sent_at[11:16]
-        prefix = "you" if self.is_outgoing else self.sender[:10]
-        tick = (
-            " [green]✓[/green]"
-            if (self.is_outgoing and self.delivered)
-            else (" [dim]·[/dim]" if self.is_outgoing else "")
-        )
-        yield Label(f"[dim]{prefix} {time_str}[/dim]{tick}")
+        prefix = "You" if self.is_outgoing else self.sender[:12]
+        icon = ""
+        if self.is_outgoing:
+            icon = {
+            "pending": "[red]●[/red]",
+            "relayed": "[yellow]●[/yellow]",
+            "delivered": "[green]✓[/green]",
+            "failed": "[bold red]![/bold red]"
+        }.get(self.status, " ")
+        yield Label(f"{prefix} {time_str} {icon}", classes="msg-meta")
         yield Label(self.msg_content)
 
-    def mark_delivered(self) -> None:
-        self.delivered = True
+    def update_status(self, status: str) -> None:
+        self.status = status
+        icon = {
+            "pending": "[red]●[/red]",
+            "relayed": "[yellow]●[/yellow]",
+            "delivered": "[green]✓[/green]",
+            "failed": "[bold red]![/bold red]"
+        }.get(status, " ")
         time_str = self.sent_at[11:16]
-        self.query_one(Label).update(f"[dim]you {time_str}[/dim] [green]✓[/green]")
+        prefix = "You" if self.is_outgoing else self.sender[:12]
+        meta = self.query_one(".msg-meta", Label)
+        meta.update(f"{prefix} {time_str} {icon}")
 
 
 class ChatPane(Vertical):
     DEFAULT_CSS = """
     ChatPane {
         width: 1fr;
+        background: $surface;
     }
 
     #chat-header {
@@ -114,10 +143,13 @@ class ChatPane(Vertical):
         background: $boost;
         text-style: bold;
         border-bottom: solid $primary;
+        width: 100%;
+        content-align: left middle;
     }
     #message-scroll {
         height: 1fr;
         padding: 1 2;
+        overflow-y: auto;
     }
     """
 
@@ -192,8 +224,17 @@ class InputBar(Horizontal):
     DEFAULT_CSS = """
     InputBar {
         height: 3;
+        dock: bottom;
         border-top: solid $primary;
-        padding: 0 1;
+        background: $boost;
+    }
+    #messages-input {
+        width: 1fr;
+        border: none;
+        background: transparent;
+    }
+    #messages-input:focus {
+        border: none;
     }
     """
 
@@ -201,24 +242,31 @@ class InputBar(Horizontal):
         yield Input(placeholder="Type a message... (Enter to send)", id="message-input")
 
 
-class ChatModal(Vertical):
+class ChatModal(ModalScreen):
     DEFAULT_CSS = """
     ChatModal {
+        align: center middle;
+        background: $background 50%;
+    }
+    #modal-dialog {
         width: 60;
-        height: 10;
-        border: solid $accent;
+        height: auto;
+        padding: 2 4;
         background: $surface;
-        padding: 1 2;
-        layer: overlay;
-        offset: 20 8; 
+        border: thick $primary;
+    }
+    #chat-modal-error {
+        margin-top: 1;
+        content-align: center middle;
     }
     """
 
     def compose(self) -> ComposeResult:
-        yield Label("Start a new conversation")
-        yield Label("Enter Peer ID: ")
-        yield Input(placeholder="Peer ID...", id="chat-input")
-        yield Label("", id="chat-modal-error")
+        with Vertical(id="modal-dialog"):
+            yield Label("Start a new conversation")
+            yield Label("Enter Peer ID: ")
+            yield Input(placeholder="Peer ID...", id="chat-input")
+            yield Label("", id="chat-modal-error")
 
     def _validate_peer_id(self, peer_id: str, own_peer_id: str) -> str | None:
         if len(peer_id) != 64 or not all(c in "0123456789abcdef" for c in peer_id):
@@ -242,11 +290,11 @@ class ChatModal(Vertical):
         if existing:
             err_label.update("[yellow]Conversation already exists[/yellow]")
             await app.on_existing_conversation(peer_id)
-            self.remove()
+            self.dismiss()
             return
 
         await self.app.start_conversation(peer_id)
-        self.remove()
+        self.dismiss()
 
 class CLISocialApp(App):
     TITLE = "cli-social"
@@ -317,22 +365,22 @@ class CLISocialApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.sub_title = f"Peer ID: {self.peer_id[:12]}"
         self.run_worker(self._start_daemon)
         await self._load_conversations()
         self.set_focus(self.query_one("#conversation-list"))
 
     async def _start_daemon(self) -> None:
-        self.notify("Starting daemon, this may take a while", title="System", severity="information", timeout=3)
+        self.notify("Starting daemon, this may take a while", title="System", severity="information", timeout=5)
         self.query_one(ChatPane).set_status("connecting")
         try:
             self._daemon = Daemon(
                 peer_id=self.peer_id,
                 private_key=self.private_key,
                 username=self.username,
-                listen_port=self.listen_port,
-                dht_port=self.dht_port,
                 bootstrap_nodes=self.bootstrap_nodes,
                 on_message=self.handle_incoming,
+                status_callback=self.handle_status_update,
                 db_path=self.db_path,
                 relay_host=self.relay_host,
                 relay_port=self.relay_port,
@@ -428,127 +476,21 @@ class CLISocialApp(App):
 
     async def _send_message(self, peer_id: str, content: str) -> None:
         chat = self.query_one(ChatPane)
-        chat.set_status("connecting")
-
-        MAX_RETRIES = 3
-        RETRY_DELAY = 2
-
-        client_message_id = str(uuid.uuid4())
-        session = None
-        delivered = False
-
-        for attempt in range(MAX_RETRIES):
-            try:
-                assert self._daemon, "Daemon is not running"
-                active_relay_host = self._daemon.relay_host
-                active_relay_port = self._daemon.relay_port
-
-                if not active_relay_host:
-                    self.notify(
-                        "still discovering relay network... pls wait",
-                        severity="warning",
-                    )
-                    chat.set_status("error")
-                    return
-
-                session = await connect_via_relay(
-                    our_peer_id=self.peer_id,
-                    our_private_key=self.private_key,
-                    their_peer_id=peer_id,
-                    relay_host=active_relay_host,
-                    relay_port=active_relay_port,
-                )
-                logger.debug(
-                    f"relay connection to {peer_id[:12]} worked via {active_relay_host}:{active_relay_port}"
-                )
-                await session.send(content, client_message_id)
-                chat.set_status("ok")
-                delivered = True
-
-                async with await Storage.open(self.db_path) as s:
-                    await s.update_contact_fingerprint(peer_id, session.fingerprint)
-                break
-
-            except PeerOfflineError as e:
-                try:
-                    async with await Storage.open(self.db_path) as s:
-                        pubkey_hex = await s.get_contact_pubkey(peer_id)
-
-                    if not pubkey_hex:
-                        self.notify("Forwading... (dht lookup)", severity="information")
-                        assert self._daemon._dht, "DHT not running"
-                        peer_info = await self._daemon._dht.lookup(peer_id) 
-                        if not peer_info or not peer_info.noise_pubkey_hex:
-                            raise ValueError(
-                                "could not find peer's public key in DHT for offline messaging"
-                            )
-                        pubkey_hex = peer_info.noise_pubkey_hex
-                        async with await Storage.open(self.db_path) as s:
-                            await s.update_contact_pubkey(peer_id, pubkey_hex)
-
-                    their_pubkey = bytes.fromhex(pubkey_hex)
-                    encrypt_blob = await encrypt_for_offline(
-                        self.peer_id,
-                        self.private_key,
-                        their_pubkey,
-                        content,
-                        client_message_id,
-                    )
-                    await write_frame(e.writer, encrypt_blob)
-                    await e.writer.drain()
-                    e.writer.close()
-                    await e.writer.wait_closed()
-
-                    self.notify("msg stored for later", severity="information") # todo remove this
-                    chat.set_status("ok")
-                    delivered = False
-                    break
-                except Exception as store_err:
-                    self.notify(f"failed to store msg {store_err}", severity="error")
-                    chat.set_status("error")
-                    if attempt < MAX_RETRIES - 1:
-                        await asyncio.sleep(RETRY_DELAY)
-                        continue
-                    return
-
-            except Exception as e:
-                self.notify(
-                    f"failed to send (attempt {attempt + 1}/{MAX_RETRIES}, {e})",
-                    severity="warning",
-                )
-                chat.set_status("error")
-                if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(RETRY_DELAY)
-                    continue
-                else:
-                    self.notify(
-                        f"failed to send {MAX_RETRIES} attempts {e}", severity="error"
-                    )
-                    return
-            finally:
-                if session:
-                    session.close()
-
+        client_msg_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         async with await Storage.open(self.db_path) as s:
-            message_id = await s.save_message(
-                peer_id=peer_id,
-                sender_peer_id=self.peer_id,
-                content=content,
-                is_outgoing=True,
-                delivered=delivered,
-            )
-        bub = await chat.append_message(
-            content,
-            "you",
-            now,
-            is_outgoing=True,
-            message_id=message_id,
-            delivered=delivered,
-        )
-        if delivered:
-            bub.mark_delivered()
+            msg_id = await s.save_message(peer_id=peer_id, sender_peer_id=self.peer_id, content=content, is_outgoing=True, client_message_id=client_msg_id)
+        
+        await chat.append_message(content, "You", now, True, message_id=msg_id, client_message_id=client_msg_id)
+        try:
+            await self._daemon.send_chat_msg(peer_id, content, client_msg_id)
+        except Exception as e:
+            self.notify(f"Network faliure: {e}", title="System", severity="error")
+            for b in self.query(MessageBubble):
+                if b.client_message_id == client_msg_id:
+                    b.update_status("failed")
 
+ 
     async def handle_incoming(self, peer_id: str, content: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         chat = self.query_one(ChatPane)
@@ -563,9 +505,18 @@ class CLISocialApp(App):
             self.notify(f"New message from {peer_id[:12]}....")
         self.call_next(self._load_conversations)
 
+    async def handle_status_update(self, msg_id: str, status: str) -> None:
+        self.call_next(self._apply_status, msg_id, status)
+
+    def _apply_status(self, msg_id: str, status: str) -> None:
+        for b in self.query(MessageBubble):
+            if b.client_message_id == msg_id:
+                b.update_status(status)
+                break
+
     async def _presence_refresh(self) -> None:
         while True:
-            await asyncio.sleep(10)
+            await asyncio.sleep(3)
             try:
                 chat = self.query_one(ChatPane)
                 if chat.current_peer_id and self._daemon and self._daemon._dht:
@@ -574,13 +525,15 @@ class CLISocialApp(App):
             except Exception:
                 pass
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         if self._daemon and self._daemon.relay_host:
             relay_info = {
                 "host": self._daemon.relay_host,
                 "port": self._daemon.relay_port,
             }
             self.state_path.write_text(json.dumps(relay_info))
+        if self._daemon:
+            await self._daemon.stop()
         if self._daemon_task:
             self._daemon_task.cancel()
         if self._presence_task:
@@ -588,8 +541,7 @@ class CLISocialApp(App):
         self.exit()
 
     def action_new_chat(self) -> None:
-        self.mount(ChatModal())
-        self.query_one("#chat-input", Input).focus()
+        self.push_screen(ChatModal())
 
     def action_blur_input(self) -> None:
         self.set_focus(self.query_one("#conversation-list"))

@@ -26,57 +26,7 @@ def generate_noise_keypair() -> tuple[bytes, bytes]:
     keypair = DH.ED25519().generate_keypair()
     return keypair.public_bytes, keypair.private.private_bytes_raw()
 
-
-async def _do_handshake_initiator(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    our_private: bytes,
-) -> NoiseConnection:
-    noise = NoiseConnection.from_name(b"Noise_XX_25519_ChaChaPoly_SHA256")
-    noise.set_as_initiator()
-    noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private)
-    noise.start_handshake()
-
-    msg1 = noise.write_message()
-    await write_frame(writer, bytes(msg1))
-
-    msg2 = await read_frame(reader)
-    noise.read_message(msg2)
-
-    msg3 = noise.write_message()
-    await write_frame(writer, bytes(msg3))
-
-    assert noise.handshake_finished, "Hanshake did not finish :("
-    logger.debug("Noise handshake finished (init)")
-    return noise
-
-
-async def _do_handshake_responder(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    our_private: bytes
-) -> NoiseConnection:
-
-    noise = NoiseConnection.from_name(b"Noise_XX_25519_ChaChaPoly_SHA256")
-    noise.set_as_responder()
-    noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private)
-    noise.start_handshake()
-
-    msg1 = await read_frame(reader)
-    noise.read_message(msg1)
-
-    msg2 = noise.write_message()
-    await write_frame(writer, bytes(msg2))
-
-    msg3 = await read_frame(reader)
-    noise.read_message(msg3)
-
-    assert noise.handshake_finished, "Hanshake did not finish :("
-    logger.debug("Noise handshake finished (resp)")
-    return noise
-
-
-async def encrypt_for_offline(our_peer_id: str, our_private_key: bytes, their_pubkey: bytes, content: str, client_message_id: str):
+async def encrypt_blob(our_peer_id: str, our_private_key: bytes, their_pubkey: bytes, content: str, client_message_id: str):
     noise = NoiseConnection.from_name(b"Noise_X_25519_ChaChaPoly_SHA256")
     noise.set_as_initiator()
     noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private_key)
@@ -92,7 +42,7 @@ async def encrypt_for_offline(our_peer_id: str, our_private_key: bytes, their_pu
     encrypted_message = noise.write_message(payload=payload)
     return bytes(encrypted_message)
 
-async def decrypt_offline_message(our_private_key: bytes, encrypted_blob: bytes) -> dict:
+async def decrypt_blob(our_private_key: bytes, encrypted_blob: bytes) -> dict:
     noise = NoiseConnection.from_name(b"Noise_X_25519_ChaChaPoly_SHA256")
     noise.set_as_responder()
     noise.set_keypair_from_private_bytes(Keypair.STATIC, our_private_key)

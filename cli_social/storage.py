@@ -3,8 +3,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import aiosqlite
+import platformdirs
 
-DEFAULT_DB_PATH = Path.home() / ".cli-social" / "data.db"
+DEFAULT_DB_PATH = Path(platformdirs.user_data_dir("cli-social")) / "data.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS contacts (
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL REFERENCES conversations(id),
     sender_peer_id TEXT NOT NULL,
+    client_message_id TEXT,
     content TEXT NOT NULL,
     sent_at TEXT NOT NULL,
     is_outgoing INTEGER NOT NULL DEFAULT 0,
@@ -53,10 +55,10 @@ class Storage:
         db = await aiosqlite.connect(db_path)
         db.row_factory = aiosqlite.Row
         await db.executescript(SCHEMA)
-        async with db.execute("PRAGMA table_info(contacts)") as cursor:
+        async with db.execute("PRAGMA table_info(messages)") as cursor:
             columns = [row["name"] for row in await cursor.fetchall()]
-            if "fingerprint" not in columns:
-                await db.execute("ALTER TABLE contacts ADD column fingerprint TEXT NOT NULL DEFAULT ''")
+            if "client_message_id" not in columns:
+                await db.execute("ALTER TABLE messages ADD column client_message_id TEXT")
         await db.commit()
         return cls(db)
     
@@ -163,16 +165,17 @@ class Storage:
         sender_peer_id: str,
         content: str,
         is_outgoing: bool = False,
-        delivered: bool = False
+        delivered: bool = False,
+        client_message_id: str | None = None
     ) -> int:
         conv_id = await self.get_or_create_conversation(peer_id)
         now = _now()
         cursor = await self._db.execute(
             """
-            INSERT INTO messages (conversation_id, sender_peer_id, content, sent_at, is_outgoing, delivered)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (conversation_id, sender_peer_id, content, sent_at, is_outgoing, delivered, client_message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (conv_id, sender_peer_id, content, now, int(is_outgoing), int(delivered)),
+            (conv_id, sender_peer_id, content, now, int(is_outgoing), int(delivered), client_message_id),
         )
         
         if not is_outgoing:
@@ -198,9 +201,9 @@ class Storage:
        # ignore these random comments ahh
        
        #tung tung tung tung tung tung tung sahur :O
-    async def mark_delivered(self, message_id: int) -> None:
+    async def mark_delivered(self, client_id: int) -> None:
         await self._db.execute(
-            "UPDATE messages SET delivered = 1 WHERE id = ?", (message_id,)
+            "UPDATE messages SET delivered = 1 WHERE client_message_id = ?", (client_id,)
         )
         await self._db.commit()
 
