@@ -76,6 +76,7 @@ class Daemon:
             peer_id=self.peer_id,
             port=self.dht_port,
             bootstrap_nodes=self.bootstrap_nodes,
+            ed25519_private_key=self.ed25519_private_key
         )
         await self._dht.start()
         self._running = True

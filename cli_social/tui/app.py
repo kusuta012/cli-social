@@ -581,7 +581,7 @@ class CLISocialApp(App):
 
     async def _presence_refresh(self) -> None:
         while True:
-            await asyncio.sleep(3)
+            await asyncio.sleep(60)
             try:
                 chat = self.query_one(ChatPane)
                 if chat.current_peer_id and self._daemon and self._daemon._dht:
