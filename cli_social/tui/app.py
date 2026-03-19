@@ -239,7 +239,7 @@ class ChatPane(Vertical):
         scroll = self.query_one("#message-scroll", ScrollableContainer)
         await scroll.remove_children()
 
-        async with await Storage.open(db_path) as s:
+        async with await self.app.get_db() as s:
             messages = await s.get_messages(peer_id, limit=50)
 
         for msg in messages:
@@ -358,7 +358,7 @@ class ChatModal(ModalScreen):
             err_label.update(f"[red]{error}[/red]")
             return
 
-        async with await Storage.open(app.db_path) as s:
+        async with await app.get_db() as s:
             convos = await s.get_conversations()
         existing = [c for c in convos if c["peer_id"] == peer_id]
         if existing:
@@ -492,7 +492,7 @@ class CLISocialApp(App):
             self.query_one(ChatPane).set_status("error")
 
     async def _load_conversations(self) -> None:
-        async with await Storage.open(self.db_path) as s:
+        async with await self.get_db() as s:
             convos = await s.get_conversations()
 
         lv = self.query_one("#conversation-list", ListView)
@@ -507,7 +507,7 @@ class CLISocialApp(App):
             )
 
     async def start_conversation(self, peer_id: str) -> None:
-        async with await Storage.open(self.db_path) as s:
+        async with await self.get_db() as s:
             await s.get_or_create_conversation(peer_id)
             if self._daemon and self._daemon._dht:
                 info = await self._daemon._dht.lookup(peer_id)
@@ -540,7 +540,7 @@ class CLISocialApp(App):
 
         await chat.load_messages(item.peer_id, item.username, db_path=self.db_path)
 
-        async with await Storage.open(self.db_path) as s:
+        async with await self.get_db() as s:
             convo_id = await s.get_or_create_conversation(item.peer_id)
             await s.mark_read(convo_id)
             contact = await s.get_contact(item.peer_id)
@@ -586,7 +586,7 @@ class CLISocialApp(App):
         chat = self.query_one(ChatPane)
         client_msg_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        async with await Storage.open(self.db_path) as s:
+        async with await self.get_db() as s:
             msg_id = await s.save_message(
                 peer_id=peer_id,
                 sender_peer_id=self.peer_id,
@@ -615,7 +615,7 @@ class CLISocialApp(App):
         now = datetime.now(timezone.utc).isoformat()
         chat = self.query_one(ChatPane)
         username = ""
-        async with await Storage.open(self.db_path) as s:
+        async with await self.get_db() as s:
             contact = await s.get_contact(peer_id)
             if contact and contact.get("username"):
                 username = contact["username"]

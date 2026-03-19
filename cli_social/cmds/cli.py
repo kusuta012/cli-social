@@ -144,7 +144,7 @@ def nuke(data_dir):
         if state_path.exists():
             state_path.unlink()
         
-        click.echo("\nWipe complete. You are a ghost again!", fg="green", bold=True)
+        click.secho("\nWipe complete. You are a ghost again!", fg="green", bold=True)
     else:
         click.echo("\nWipe cancelled. Your identity and data remain intact")
 
