@@ -3,8 +3,6 @@ import asyncio
 import json
 import logging
 import socket
-
-from cli_social.p2p.dht import PeerInfo
 from cli_social.p2p.registry import fetch_and_vrfy_registry
 from cli_social.p2p.utils import read_frame, write_frame
 
@@ -66,7 +64,7 @@ class RelayServer:
         self._mesh_task: asyncio.Task | None = None
         self._me_addr: set[str] = set()
         self._pending_dials: set[str] = set()
-        self._pending_acks: dict[str, list[dict]]
+        self._pending_acks: dict[str, list[dict]] = {}
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
