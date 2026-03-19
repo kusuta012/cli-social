@@ -215,7 +215,11 @@ class Daemon:
                     payload_hex = msg.get("payload")
                     try:
                         decrypted = await decrypt_blob(self.private_key, bytes.fromhex(payload_hex))
-                        await self._on_message(peer_id=decrypted.get("sender_id", "unknown"), content=decrypted["content"], client_message_id=decrypted.get("message_id"))
+                        sender_id = decrypted.get("peer_id", "unknown")
+                        client_msg_id = decrypted.get("client_message_id")
+                        await self._on_message(peer_id=sender_id, content=decrypted["content"], client_message_id=client_msg_id)
+                        ack = {"type": "client_ack", "to": sender_id, "message_id": client_msg_id}
+                        await write_frame(writer, json.dumps(ack).encode())
                     except Exception as e:
                         logger.error(f"failed to decrypt stored msg, {e}")
                 elif msg_type == "ping":
@@ -244,7 +248,7 @@ class Daemon:
         self._running = False
         if self._relay_task:
             self._relay_task.cancel()
-        for task in list(self._relay_session_tasks):
+        for task in list(self._bg_tasks):
             task.cancel()
         if self._relay_writer:
             self._relay_writer.close()
@@ -298,7 +302,7 @@ class Daemon:
             alive_relays = [(r, lat) for r, lat in results if lat != float("inf")]
 
             if not alive_relays:
-                logger.error("all relays unreachable at the moment, please retry")
+                logger.error("all relays unreacsble at the moment, please retry")
                 return
 
             alive_relays.sort(key=lambda x: x[1])

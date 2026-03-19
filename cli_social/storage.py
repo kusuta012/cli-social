@@ -1,8 +1,10 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
 import aiosqlite
 import platformdirs
 
@@ -218,7 +220,7 @@ class Storage:
     ) -> list[dict]:
         async with self._db.execute(
             """
-            SELECT m.id, m.sender_peer_id, m.content, m.sent_at, m.is_outgoing, m.delivered
+            SELECT m.id, m.sender_peer_id, m.client_message_id, m.content, m.sent_at, m.is_outgoing, m.delivered
             FROM messages m
             JOIN conversations c ON c.id = m.conversation_id
             WHERE c.peer_id = ?

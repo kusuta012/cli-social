@@ -100,7 +100,7 @@ class MessageBubble(Static):
         self.delivered = delivered
         self.message_id = message_id
         self.client_message_id = client_message_id
-        self.status = "pending"
+        self.status = "delivered" if delivered else "pending"
         self.add_class("outgoing" if is_outgoing else "incoming")
     
     def compose(self) -> ComposeResult:
@@ -183,6 +183,7 @@ class ChatPane(Vertical):
                 is_outgoing=bool(msg["is_outgoing"]),
                 delivered=bool(msg["delivered"]),
                 message_id=msg["id"],
+                client_message_id=msg["client_message_id"]
             )
             await scroll.mount(bubble)
         scroll.scroll_end(animate=False)
@@ -226,7 +227,6 @@ class InputBar(Horizontal):
     DEFAULT_CSS = """
     InputBar {
         height: 3;
-        dock: bottom;
         border-top: solid $primary;
         background: $boost;
     }

@@ -335,18 +335,18 @@ class RelayServer:
 
 
     async def _flush_stored(self, conn: RelayConnection) -> None:
-        messages = self._store.pop(conn.peer_id, [])
-        if not messages:
-            return
-        logger.debug(f"flushing {len(messages)} stored messages to {conn.peer_id[:12]}")
-        for msg in messages:
-            try:
-                wrap = {"type": "stored_message", "payload": msg.hex()}
-                await conn.send_msg(wrap)
-            except Exception as e:
-                logger.error(f"failed to flush {conn.peer_id[:12], {e}}")
-                self._store[conn.peer_id] = messages[messages.index(msg):]
-                break
+        peer_id = conn.peer_id
+        if peer_id in self._store:
+            messages = self._store.pop(conn.peer_id, [])
+            logger.debug(f"flushing {len(messages)} stored messages to {conn.peer_id[:12]}")
+            for msg in messages:
+                try:
+                    wrap = {"type": "stored_message", "payload": msg.hex()}
+                    await conn.send_msg(wrap)
+                except Exception as e:
+                    logger.error(f"failed to flush {conn.peer_id[:12], {e}}")
+                    self._store[conn.peer_id] = messages[messages.index(msg):]
+                    break
             
 if __name__ == "__main__":
     import argparse

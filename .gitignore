@@ -21,3 +21,5 @@ docker-compose.yml
 publish_reg.py
 *.ruff-cache/
 *.vscode
+.ruff.toml
+uv.lock
