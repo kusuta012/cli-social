@@ -150,7 +150,8 @@ class Daemon:
                 pubkey_hex = peer_info.noise_pubkey_hex
                 if self._storage:
                     await self._storage.update_contact_pubkey(target_peer_id, pubkey_hex)
-        
+                if peer_info.fingerprint:
+                    await self._storage.update_contact_fingerprint(target_peer_id, peer_info.fingerprint)
         if not pubkey_hex:
             raise ValueError("target public key unknown")
         
@@ -203,7 +204,8 @@ class Daemon:
 
                     try:
                         decrypted = await decrypt_blob(self.private_key, bytes.fromhex(payload_hex))
-                        await self._on_message(sender_id, decrypted["content"], client_msg_id)
+                        verified_sender = decrypted.get("peer_id", sender_id)
+                        await self._on_message(verified_sender, decrypted["content"], client_msg_id)
                         ack = {"type": "client_ack", "to": sender_id, "message_id": client_msg_id}
                         await write_frame(writer, json.dumps(ack).encode())
                     except Exception as e:

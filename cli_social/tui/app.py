@@ -168,16 +168,17 @@ class ChatPane(Vertical):
 
     current_peer_id: reactive[Optional[str]] = reactive(None)
     current_username: str = ""
+    current_fingerprint: str = ""
 
     def compose(self) -> ComposeResult:
         yield Label("Select a conversation", id="chat-header")
         yield ScrollableContainer(id="message-scroll")
 
     async def load_messages(
-        self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH
-    ) -> None:
+        self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH) -> None:
         self.current_peer_id = peer_id
         self.current_username = username
+        self.current_fingerprint = ""
         self.query_one("#chat-header", Label).update(
             f"{username or peer_id[:16]}  [dim]●[/dim]"
         )
@@ -233,7 +234,11 @@ class ChatPane(Vertical):
         }.get(status, "[dim]●[/dim]")
         header = self.query_one("#chat-header", Label)
         name = self.current_username or (self.current_peer_id or "")[:16]
-        header.update(f"{name} {dot}")
+        fp_str = ""
+        if self.current_fingerprint:
+            fp = self.current_fingerprint
+            fp_str = f" [dim]({fp[:8]}...{fp[-8:]})[/dim]"
+        header.update(f"{name}{fp_str} {dot}")
 
 
 class InputBar(Horizontal):
@@ -450,7 +455,7 @@ class CLISocialApp(App):
             if self._daemon and self._daemon._dht:
                 info = await self._daemon._dht.lookup(peer_id)
                 if info:
-                    await s.add_contact(peer_id, username=info.username, fingerprint=info.fingerprint)
+                    await s.add_contact(peer_id, username=info.username, public_key=info.noise_pubkey_hex, fingerprint=info.fingerprint)
         await self._load_conversations()
 
     async def on_existing_conversation(self, peer_id: str) -> None:
@@ -483,11 +488,7 @@ class CLISocialApp(App):
                     badge_label.update(f" {name}")
 
         if contact and contact.get("fingerprint"):
-            fp = contact["fingerprint"]
-            chat.query_one("#chat-header", Label).update(
-                f"{item.username or item.peer_id[:16]} [dim]({fp[:8]}...{fp[-8:]})[/dim] F"
-            )
-
+            chat.current_fingerprint = contact["fingerprint"]
         chat.set_status("connecting")
         if self._daemon and self._daemon._dht:
 
@@ -556,7 +557,7 @@ class CLISocialApp(App):
                 if info:
                     if info.username:
                         username = info.username
-                    await s.add_contact(peer_id, username=info.username, fingerprint=info.fingerprint)
+                    await s.add_contact(peer_id, username=info.username, public_key=info.noise_pubkey_hex, fingerprint=info.fingerprint)
         display_name = username or peer_id[:12]
         if chat.current_peer_id == peer_id:
             self.call_next(chat.append_message, content, display_name, now, False)

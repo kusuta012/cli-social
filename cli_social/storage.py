@@ -79,36 +79,38 @@ class Storage:
         
     async def add_contact(
         self,
-        peer_id: str,
+        peer_id: str,      
         username: str = "",
         public_key: str = "",
         host: str = "",
-        port: int = 0
+        port: int = 0,
+        fingerprint: str = ""
     ) -> None:
         await self._db.execute(
             """
-            INSERT INTO contacts (peer_id, username, public_key, host, port, added_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO contacts (peer_id, username, public_key, host, port, added_at, fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(peer_id) DO UPDATE SET
                 username = excluded.username,
                 public_key = excluded.public_key,
                 host = excluded.host,
-                port = excluded.port
+                port = excluded.port,
+                fingerprint = excluded.fingerprint
             """,
-            (peer_id, username, public_key, host, port, _now())
+            (peer_id, username, public_key, host, port, _now(), fingerprint)
         )
         await self._db.commit()
         
     async def get_contacts(self) -> list[dict]:
         async with self._db.execute(
-            "SELECT peer_id, username, public_key, host, port, added_at FROM contacts ORDER BY username"
+            "SELECT peer_id, username, public_key, host, port, added_at, fingerprint FROM contacts ORDER BY username"
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
     
     async def get_contact(self, peer_id: str) -> Optional[dict]:
         async with self._db.execute(
-            "SELECT peer_id, username, public_key, added_at FROM contacts WHERE peer_id = ?",
+            "SELECT peer_id, username, public_key, added_at, fingerprint FROM contacts WHERE peer_id = ?",
             (peer_id,),
         ) as cursor:
             row = await cursor.fetchone()
