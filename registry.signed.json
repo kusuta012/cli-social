@@ -1,38 +1,38 @@
 {
-  "version": 4,
-  "timestamp": 1773753812,
+  "version": 5,
+  "timestamp": 1773927553,
   "relays": [
     {
-      "id": "relay-1",
+      "id": "relay_977e3e72",
       "address": "tcp://64.227.164.21:19853",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "speedhawks",
-        "region": "global"
+        "region": "Asia-South"
       }
     },
     {
-      "id": "relay-2",
+      "id": "relay_f6d48494",
       "address": "tcp://40.233.121.197:49515",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "thirtyseven",
-        "region": "global"
+        "region": "NA-East"
       }
     },
     {
-      "id": "relay-3",
+      "id": "relay_4e5fa539",
       "address": "tcp://ip.kirze.de:8000",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "seradedstripes",
-        "region": "global"
+        "region": "Africa-South"
       }
     },
     {
@@ -43,55 +43,55 @@
       ],
       "meta": {
         "operator": "cybdo",
-        "region": "global"
+        "region": "Oceania"
       }
     },
     {
-      "id": "relay-5",
+      "id": "relay_7565ba72",
       "address": "tcp://167.172.54.215:36050",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "speedhawks",
-        "region": "global"
+        "region": "EU-West"
       }
     },
     {
-      "id": "relay-6",
+      "id": "relay_a067fbaf",
       "address": "tcp://168.144.33.104:43405",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "speedhawks",
-        "region": "global"
+        "region": "US-Central"
       }
     },
     {
-      "id": "relay-7",
+      "id": "relay_a9e8bbaf",
       "address": "tcp://146.190.115.144:41861",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "speedhawks",
-        "region": "global"
+        "region": "US-West"
       }
     },
     {
-      "id": "relay-8",
+      "id": "relay_46111c93",
       "address": "tcp://157.230.92.249:62614",
       "roles": [
         "relay"
       ],
       "meta": {
         "operator": "speedhawks",
-        "region": "global"
+        "region": "US-East"
       }
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "fd7cb77734d14099ab623924255ea6312e429c7a21219d09423c2803a6219f2ca553f1effa274da5dffd8543e8e6a5fa6b453a6a0c7dd0bc5fa13188b1bc650f"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "ccc35d4f3cc490d3602d526ca6529874cfcf7e83217c4c7f28d509ca31d825dfa5b039a7219dc026f6d99af7936aedddd3ea4c0e816e30238878152e92f15103"
   }
 }
