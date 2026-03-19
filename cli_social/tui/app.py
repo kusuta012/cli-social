@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, Label
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
@@ -107,7 +108,9 @@ class MessageBubble(Static):
         self.delivered = delivered
         self.message_id = message_id
         self.client_message_id = client_message_id
-        self.status = {0: "pending", 1: "relayed", 2: "delivered"}.get(delivered, "pending")
+        self.status = {0: "pending", 1: "relayed", 2: "delivered"}.get(
+            delivered, "pending"
+        )
         self.add_class("outgoing" if is_outgoing else "incoming")
 
     def compose(self) -> ComposeResult:
@@ -165,6 +168,11 @@ class ChatPane(Vertical):
         padding: 1 2;
         overflow-y: auto;
     }
+    .ascii-banner {
+        width: 100%;
+        height: 100%;
+        content-align: center middle;
+    }
     """
 
     current_peer_id: reactive[Optional[str]] = reactive(None)
@@ -173,10 +181,54 @@ class ChatPane(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Label("Select a conversation", id="chat-header")
-        yield ScrollableContainer(id="message-scroll")
+        scroll = ScrollableContainer(id="message-scroll")
+        banner = Static(
+            r"""
+             ██████╗██╗     ██╗    ███████╗██╗  ██╗ ██████╗██╗     
+            ██╔════╝██║     ██║    ██╔════╝╚██╗██╔╝██╔════╝██║     
+            ██║     ██║     ██║    ███████╗ ╚███╔╝ ██║     ██║     
+            ██║     ██║     ██║    ╚════██║ ██╔██╗ ██║     ██║     
+            ╚██████╗███████╗██║    ███████║██╔╝ ██╗╚██████╗███████╗
+             ╚═════╝╚══════╝╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝                                         
+            """,
+            classes="ascii-banner",
+        )
+
+        with scroll:
+            banner.styles.width = "100%"
+            banner.styles.height = "100%"
+            banner.styles.padding = (4, 8)
+            yield banner
+
+    async def close_chat(self) -> None:
+        self.current_peer_id = None
+        self.current_username = ""
+        self.current_fingerprint = ""
+        self.query_one("#chat-header", Label).update("Select a conversation")
+
+        scroll = self.query_one("#message-scroll", ScrollableContainer)
+        await scroll.remove_children()
+
+        banner = Static(
+            r"""
+ ██████╗██╗     ██╗    ███████╗██╗  ██╗ ██████╗██╗     
+██╔════╝██║     ██║    ██╔════╝╚██╗██╔╝██╔════╝██║     
+██║     ██║     ██║    ███████╗ ╚███╔╝ ██║     ██║     
+██║     ██║     ██║    ╚════██║ ██╔██╗ ██║     ██║     
+╚██████╗███████╗██║    ███████║██╔╝ ██╗╚██████╗███████╗
+ ╚═════╝╚══════╝╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝                                         
+            """,
+            classes="ascii-banner",
+        )
+        banner.styles.content_align = ("center", "middle")
+        banner.styles.color = "white"
+        banner.styles.height = "100%"
+
+        await scroll.mount(banner)
 
     async def load_messages(
-        self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH) -> None:
+        self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH
+    ) -> None:
         self.current_peer_id = peer_id
         self.current_username = username
         self.current_fingerprint = ""
@@ -238,8 +290,9 @@ class ChatPane(Vertical):
         fp_str = ""
         if self.current_fingerprint:
             fp = self.current_fingerprint
-            fp_str = f" [bold magenta](Safety: {fp[:6]})[/bold magenta]" # majestic magenta :3
+            fp_str = f" [bold magenta](Safety: {fp[:6]})[/bold magenta]"  # majestic magenta :3
         header.update(f"{name}{fp_str} {dot}")
+
 
 class InputBar(Horizontal):
     DEFAULT_CSS = """
@@ -340,6 +393,7 @@ class CLISocialApp(App):
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+n", "new_chat", "New Chat"),
+        Binding("ctrl+d", "close_chat", "Close Chat", priority=True),
         ("ctrl+b", "toggle_sidebar", "Toggle Sidebar"),
         ("escape", "blur_input", "Sidebar"),
     ]
@@ -355,7 +409,7 @@ class CLISocialApp(App):
         db_path: Path = DEFAULT_DB_PATH,
         relay_host: str | None = None,
         relay_port: int = 9100,
-        ed25519_key=None
+        ed25519_key=None,
     ) -> None:
         super().__init__()
         self.peer_id = peer_id
@@ -389,6 +443,9 @@ class CLISocialApp(App):
         yield InputBar()
         yield Footer()
 
+    async def get_db(self) -> Storage:
+        return await Storage.open(self.db_path, encryption_key=self.private_key)
+
     async def on_mount(self) -> None:
         self.sub_title = f"Peer ID: {self.peer_id[:12]}"
         self.run_worker(self._start_daemon)
@@ -415,7 +472,7 @@ class CLISocialApp(App):
                 relay_host=self.relay_host,
                 relay_port=self.relay_port,
                 cached_relay=self.cached_relay,
-                ed25519_private_key=self.ed25519_key
+                ed25519_private_key=self.ed25519_key,
             )
             await self._daemon.start()
             self._daemon_task = asyncio.create_task(
@@ -455,7 +512,12 @@ class CLISocialApp(App):
             if self._daemon and self._daemon._dht:
                 info = await self._daemon._dht.lookup(peer_id)
                 if info:
-                    await s.add_contact(peer_id, username=info.username, public_key=info.noise_pubkey_hex, fingerprint=info.fingerprint)
+                    await s.add_contact(
+                        peer_id,
+                        username=info.username,
+                        public_key=info.noise_pubkey_hex,
+                        fingerprint=info.fingerprint,
+                    )
         await self._load_conversations()
 
     async def on_existing_conversation(self, peer_id: str) -> None:
@@ -479,13 +541,13 @@ class CLISocialApp(App):
         await chat.load_messages(item.peer_id, item.username, db_path=self.db_path)
 
         async with await Storage.open(self.db_path) as s:
-                    convo_id = await s.get_or_create_conversation(item.peer_id)
-                    await s.mark_read(convo_id)
-                    contact = await s.get_contact(item.peer_id)
-                    item.unread = 0
-                    badge_label = item.query_one(".convo-label", Label)
-                    name = item.username or item.peer_id[:12] + "..."
-                    badge_label.update(f" {name}")
+            convo_id = await s.get_or_create_conversation(item.peer_id)
+            await s.mark_read(convo_id)
+            contact = await s.get_contact(item.peer_id)
+            item.unread = 0
+            badge_label = item.query_one(".convo-label", Label)
+            name = item.username or item.peer_id[:12] + "..."
+            badge_label.update(f" {name}")
 
         if contact and contact.get("fingerprint"):
             my_noise_hex = self._daemon.noise_pubkey_hex if self._daemon else ""
@@ -562,7 +624,12 @@ class CLISocialApp(App):
                 if info:
                     if info.username:
                         username = info.username
-                    await s.add_contact(peer_id, username=info.username, public_key=info.noise_pubkey_hex, fingerprint=info.fingerprint)
+                    await s.add_contact(
+                        peer_id,
+                        username=info.username,
+                        public_key=info.noise_pubkey_hex,
+                        fingerprint=info.fingerprint,
+                    )
         display_name = username or peer_id[:12]
         if chat.current_peer_id == peer_id:
             self.call_next(chat.append_message, content, display_name, now, False)
@@ -610,10 +677,15 @@ class CLISocialApp(App):
 
     def action_blur_input(self) -> None:
         self.set_focus(self.query_one("#conversation-list"))
-    
+
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one(Sidebar)
         sidebar.display = not sidebar.display
+
+    async def action_close_chat(self) -> None:
+        chat = self.query_one(ChatPane)
+        await chat.close_chat()
+
 
 def run(
     peer_id: str = "",
@@ -625,7 +697,7 @@ def run(
     db_path: Path = DEFAULT_DB_PATH,
     relay_host: str | None = None,
     relay_port: int = 9100,
-    ed25519_key=None
+    ed25519_key=None,
 ) -> None:
     CLISocialApp(
         peer_id=peer_id,
@@ -637,5 +709,5 @@ def run(
         db_path=db_path,
         relay_host=relay_host,
         relay_port=relay_port,
-        ed25519_key=ed25519_key
+        ed25519_key=ed25519_key,
     ).run()

@@ -70,8 +70,7 @@ class Daemon:
             .public_bytes(Encoding.Raw, PublicFormat.Raw)
             .hex()
         )
-
-        self._storage = await Storage.open(self.db_path or DEFAULT_DB_PATH)
+        self._storage = await Storage.open(self.db_path or DEFAULT_DB_PATH, encryption_key=self.private_key)
         self._dht = DHTNode(
             peer_id=self.peer_id,
             port=self.dht_port,

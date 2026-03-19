@@ -2,8 +2,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from re import S
 import socket
 import hashlib
+import os
+import aiosqlite
 import secrets
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cli_social.p2p.registry import fetch_and_vrfy_registry
@@ -59,7 +62,7 @@ class RelayServer:
         host_hash = socket.gethostname()
         self.relay_id = f"relay_{host_hash[:8]}"
         self._online: dict[str, RelayConnection] = {}
-        self._store: dict[str, list[bytes]] = {}
+        self._db: aiosqlite.Connection | None = None
         self._server: asyncio.Server | None = None
         self._mesh_conns: dict[str, RelayConnection] = {}
         self._mesh_presence: dict[str, str] = {}
@@ -73,6 +76,11 @@ class RelayServer:
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
+        db_path = os.getenv("RELAY_DB_PATH", "relay.db")
+        self._db = await aiosqlite.connect(db_path)
+        await self._db.execute("CREATE TABLE IF NOT EXISTS store (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id TEXT NOT NULL, payload BLOB NOT NULL)")
+        await self._db.execute("CREATE TABLE IF NOT EXISTS pending_acks (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id TEXT NOT NULL, from_id TEXT NOT NULL, message_id TEXT NOT NULL)")
+        await self._db.commit()
         self._server = await asyncio.start_server(
             self._handle_client,
             self.host,
@@ -82,6 +90,8 @@ class RelayServer:
         self._mesh_task = asyncio.create_task(self._mesh_mngr())
 
     async def stop(self) -> None:
+        if self._db:
+            await self._db.close()
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -192,24 +202,35 @@ class RelayServer:
         
         if msg_type == "mesh_add" and peer_id and relay_id:
             self._mesh_presence[peer_id] = relay_id
-            if peer_id in self._store:
-                queued = self._store.pop(peer_id, [])
-                remote_conn = self._mesh_conns.get(relay_id)
-                if remote_conn and remote_conn.alive:
-                    for payload in queued:
-                        wrap = {"type": "mesh_stored_forward", "to": peer_id, "payload": payload.hex()}
+            if not self._db:
+                return
+            async with self._db.execute("SELECT id, payload FROM store WHERE peer_id = ?", (peer_id,)) as cur:
+                stored = await cur.fetchall()
+            remote_conn = self._mesh_conns.get(relay_id)
+            if stored and remote_conn and remote_conn.alive:
+                s_ids = []
+                for r_id, p in stored:
+                        wrap = {"type": "mesh_stored_forward", "to": peer_id, "payload": p.hex()}
                         t = asyncio.create_task(remote_conn.send_msg(wrap))
                         self._bg_tasks.add(t)
                         t.add_done_callback(self._bg_tasks.discard)
-            if peer_id in self._pending_acks:
-                acks = self._pending_acks.pop(peer_id, [])
-                remote_conn = self._mesh_conns.get(relay_id)
-                if remote_conn and remote_conn.alive:
-                    for ack in acks:
-                        wrap = {"type": "mesh_ack", "to": peer_id, "from": ack["from"], "message_id": ack["message_id"]}
-                        t = asyncio.create_task(remote_conn.send_msg(wrap))
-                        self._bg_tasks.add(t)
-                        t.add_done_callback(self._bg_tasks.discard)
+                        s_ids.append(r_id)
+                if s_ids:
+                    await self._db.execute(f"DELETE FROM store WHERE id IN ({','.join('?' for _ in s_ids)})", s_ids)
+                    await self._db.commit()
+            async with self._db.execute("SELECT id, payload FROM store WHERE peer_id = ?", (peer_id,)) as cur:
+                acks = await cur.fetchall()
+            if acks and remote_conn and remote_conn.alive:
+                a_ids = []
+                for a_id, frm, m_id in acks:
+                    wrap = {"type": "mesh_ack", "to": peer_id, "from": frm, "message_id": m_id}
+                    t = asyncio.create_task(remote_conn.send_msg(wrap))
+                    self._bg_tasks.add(t)
+                    t.add_done_callback(self._bg_tasks.discard)
+                    a_ids.append(a_id)
+                if a_ids:
+                    await self._db.execute(f"DELETE FROM pending_acks WHERE id IN ({','.join('?' for _ in a_ids)})", a_ids)
+                    await self._db.commit()
         elif msg_type == "mesh_remove" and peer_id:
             self._mesh_presence.pop(peer_id, None)
         elif msg_type == "mesh_forward":
@@ -407,52 +428,71 @@ class RelayServer:
             conn.close()
         
     def _store_payload(self, peer_id: str, payload: bytes) -> None:
-        queue = self._store.setdefault(peer_id, [])
-        queue.append(payload)
-        if len(queue) > STORE_MAX_MESSAGES:
-            queue.pop(0)
-            logger.warning(f"store full for {peer_id[:12]}, dropping oldest msg")
-    
+        async def _save():
+            if not self._db:
+                return
+            await self._db.execute("INSERT INTO store (peer_id, payload) VALUES (?, ?)", (peer_id, payload))
+            await self._db.commit()
+        t = asyncio.create_task(_save())
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
+
     def _store_pending_ack(self, peer_id: str, ack_data: dict) -> None:
-        queue = self._pending_acks.setdefault(peer_id, [])
-        queue.append(ack_data)
-        if len(queue) > STORE_MAX_MESSAGES:
-            queue.pop(0)
-            logger.warning(f"pending ack store full for {peer_id[:12]}, dropping oldest ack")
+        async def _save():
+            if not self._db:
+                return
+            await self._db.execute("INSERT INTO pending_acks (peer_id, from_id, message_id) VALUES (?, ?, ?)", (peer_id, ack_data["from"], ack_data["message_id"]))
+            await self._db.commit()
+        t = asyncio.create_task(_save())
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
     
     async def _flush_pending_acks(self, conn: RelayConnection) -> None:
+        if not self._db:
+            return
         peer_id = conn.peer_id
-        acks = self._pending_acks.pop(peer_id, [])
+        async with self._db.execute("SELECT id, from_id, message_id FROM pending_acks WHERE peer_id = ?", (peer_id,)) as cur:
+            acks = await cur.fetchall()
         if acks:
-            logger.debug(f"flushing pending acks to {peer_id[:12]}")
-        for ack in acks:
-            try:
-                await conn.send_msg({"type": "delivery_ack", "from": ack["from"], "message_id": ack["message_id"]})
-            except Exception as e:
-                logger.error(f"failed to flush ack to {peer_id[:12]}, {e}")
-                break
-
+            logger.debug(f"flushing {len(acks)} acks to {peer_id[:12]}")
+            s_ids = []
+            for a_id, frm, m_id in acks:
+                try:
+                    await conn.send_msg({"type": "delivery_ack", "from": frm, "message_id": m_id})
+                    s_ids.append(a_id)
+                except Exception as e:
+                    logger.error(f"failed to flush ack to {peer_id[:12]}, {e}")
+                    break
+            if s_ids:
+                await self._db.execute(f"DELETE FROM pending_acks WHERE id IN ({','.join('?' for _ in s_ids)})", s_ids)
+                await self._db.commit()
     
     def _unregister(self, conn: RelayConnection) -> None:
         self._online.pop(conn.peer_id, None)
         conn.close()
         logger.info(f"peer {conn.peer_id[:12]} unregisterd")
 
-
     async def _flush_stored(self, conn: RelayConnection) -> None:
+        if not self._db:
+            return
         peer_id = conn.peer_id
-        if peer_id in self._store:
-            messages = self._store.pop(conn.peer_id, [])
-            logger.debug(f"flushing {len(messages)} stored messages to {conn.peer_id[:12]}")
-            for msg in messages:
+        async with self._db.execute("SELECT id, payload FROM store WHERE peer_id = ?", (peer_id,)) as cur:
+            stored = await cur.fetchall()
+        if stored:
+            logger.debug(f"flushing {len(stored)} stored to {peer_id[:12]}")
+            s_ids = []
+            for r_id, p in stored:
                 try:
-                    wrap = {"type": "stored_message", "payload": msg.hex()}
-                    await conn.send_msg(wrap)
+                    await conn.send_msg({"type": "stored_message", "payload": p.hex()})
+                    s_ids.append(r_id)
                 except Exception as e:
-                    logger.error(f"failed to flush {conn.peer_id[:12]} {e}")
-                    self._store[conn.peer_id] = messages[messages.index(msg):]
+                    logger.error(f"failed to flush msg to {peer_id[:12]}, {e}")
                     break
-            
+            if s_ids:
+                await self._db.execute(f"DELETE FROM store WHERE id IN ({','.join('?' for _ in s_ids)})", s_ids)
+                await self._db.commit()
+    
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

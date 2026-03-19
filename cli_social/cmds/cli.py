@@ -39,10 +39,16 @@ DATA_DIR_OPTION = click.option(
 def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str, Ed25519PublicKey, Ed25519PrivateKey]:
     key_file = _key_file_for(data_dir)
     if not identity_exists(key_file):
-        click.echo("No identity found. Run `sxcl init` first.")
-        raise SystemExit(1)
+        click.echo("\n Welcome to CLI-SXCL! No identity found")
+        do_setup = click.prompt("Would you like to set one up now? [Y/n]", default="y")
+        if do_setup.lower().startswith('y'):
+            init.callback(data_dir)
+            click.echo("\n---Setup Complete! ---\n")
+        else:
+            click.echo("Okay! Run `sxcl init` when you are ready")
+            raise SystemExit(1)
     
-    passphrase = click.prompt("Passphrase", hide_input=True)
+    passphrase = click.prompt("Enter your passphrase", hide_input=True)
     
     try:
         private_key, public_key, peer_id, username, noise_private_bytes = load_identity(passphrase, key_file)
@@ -116,6 +122,32 @@ def init(data_dir):
     click.echo(f"   Peer ID  : {peer_id}")
     click.echo(f"   Key File : {key_path}")
     click.echo("\n Remember your passphrase, there is no recovery")
+
+@main.command()
+@DATA_DIR_OPTION
+def nuke(data_dir):
+    key_file = _key_file_for(data_dir)
+    db_path = db_path_for(data_dir)
+
+    click.secho("\n WARNING: Thid will permanently delete your identity and ALL messages!", fg="red", bold=True)
+    confirm = click.prompt("Are you ABSOLUTELY sure? Type 'DELETE' to confirm", default="")
+
+    if confirm == "DELETE":
+        if key_file.exists():
+            key_file.unlink()
+            click.echo(f"[-] Deleted identity at {key_file}")
+        if db_path.exists():
+            db_path.unlink()
+            click.echo(f"[-] Deleted database at {db_path}")
+        
+        state_path = db_path.parent / "state.json"
+        if state_path.exists():
+            state_path.unlink()
+        
+        click.echo("\nWipe complete. You are a ghost again!", fg="green", bold=True)
+    else:
+        click.echo("\nWipe cancelled. Your identity and data remain intact")
+
     
 @main.command()
 @DATA_DIR_OPTION
@@ -200,15 +232,14 @@ def daemon(dht_port, bootstrap, data_dir):
     asyncio.run(_run())
   
 @main.command()
-@click.option("--host", default="0.0.0.0", help="the host to lsiten on")
+@click.option("--host", default="0.0.0.0", help="the host to listen on")
 @click.option("--relay-port", default=19853, help="tcp port for relay server")
 @click.option("--dht-port", default=6969, help="UDP port for the dht node")
 @click.option("--relay", is_flag=True, help="run as a message relay node")
 @click.option("--bootstrap", is_flag=True, help="run as dht bootstrap node")
-@click.option("--store", is_flag=True, help="run as store-fwd mode") # do not use rn
-def node(host, relay_port, dht_port, relay, bootstrap, store):
-    if not (relay or bootstrap or store):
-        click.echo("You must specify role (--relay, --boostrap, --store)")
+def node(host, relay_port, dht_port, relay, bootstrap):
+    if not (relay or bootstrap):
+        click.echo("You must specify role (--relay, --boostrap)")
         return
     
     import logging
@@ -221,8 +252,7 @@ def node(host, relay_port, dht_port, relay, bootstrap, store):
             tasks.append(dht.start())
             click.echo(f"DHT bootstrap node listening on UDP {host}:{dht_port}")
             
-        if relay or store:
-            # is_store_node = store
+        if relay:
             relay_server = RelayServer(host=host, port=relay_port)
             tasks.append(asyncio.create_task(relay_server.start()))
             click.echo(f"Relay node listening on TCP {host}:{relay_port}")

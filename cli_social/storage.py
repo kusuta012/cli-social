@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Optional
 
 import aiosqlite
+from cryptography import fernet
 import platformdirs
+import base64
+from cryptography.fernet import Fernet, InvalidToken
 
 DEFAULT_DB_PATH = Path(platformdirs.user_data_dir("cli-social")) / "data.db"
 
@@ -49,11 +52,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 class Storage:
-    def __init__(self, db: aiosqlite.Connection):
+    def __init__(self, db: aiosqlite.Connection, fernet: Fernet | None = None):
         self._db = db
+        self._fernet = fernet
         
     @classmethod
-    async def open(cls, db_path: Path = DEFAULT_DB_PATH) -> "Storage":
+    async def open(cls, db_path: Path = DEFAULT_DB_PATH, encryption_key: bytes | None = None) -> "Storage":
+        fernet = None
+        if encryption_key:
+            key_b64 = base64.urlsafe_b64encode(encryption_key[:32].ljust(32, b'\0'))
+            fernet = Fernet(key_b64)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         db = await aiosqlite.connect(db_path)
         db.row_factory = aiosqlite.Row
@@ -66,7 +74,7 @@ class Storage:
                 except aiosqlite.OperationalError:
                     logging.error("no problem pookie")
         await db.commit()
-        return cls(db)
+        return cls(db, fernet=fernet)
     
     async def close(self):
         await self._db.close()
@@ -176,6 +184,8 @@ class Storage:
         delivered: bool = False,
         client_message_id: str | None = None
     ) -> int:
+        if self._fernet:
+            content = self._fernet.encrypt(content.encode('utf-8')).decode('utf-8')
         conv_id = await self.get_or_create_conversation(peer_id)
         now = _now()
         cursor = await self._db.execute(
@@ -239,4 +249,13 @@ class Storage:
             (peer_id, limit),
         ) as cursor:
             rows = await cursor.fetchall()
-            return [dict(row) for row in reversed(list(rows))]
+            messages = []
+            for row in reversed(list(rows)):
+                msg = dict(row)
+                if self._fernet:
+                    try:
+                        msg["content"] = self._fernet.decrypt(msg["content"].encode('utf-8')).decode('utf-8')
+                    except InvalidToken:
+                        pass
+                messages.append(msg)
+            return messages
