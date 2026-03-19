@@ -164,7 +164,7 @@ def tui(dht_port, bootstrap, relay, data_dir):
 @DATA_DIR_OPTION
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="Bootstrap nodes as host:port")
-def daemon(port, dht_port, bootstrap, data_dir):
+def daemon(dht_port, bootstrap, data_dir):
     peer_id, private_key, username, _ = _require_identity(data_dir)
     
     bootstrap_nodes = []
@@ -185,7 +185,6 @@ def daemon(port, dht_port, bootstrap, data_dir):
             db_path=db_path_for(data_dir)
         )
         await d.start()
-        click.echo(f"Daemon running on port {port}")
         click.echo(f"DHT port {dht_port}")
         click.echo(f"Peer ID {peer_id[:16]}....{peer_id[-8:]}")
         click.echo("Press Ctrl+C to stop")

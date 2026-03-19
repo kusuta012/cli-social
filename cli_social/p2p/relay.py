@@ -4,6 +4,7 @@ import json
 import logging
 import socket
 
+from cli_social.p2p.dht import PeerInfo
 from cli_social.p2p.registry import fetch_and_vrfy_registry
 from cli_social.p2p.utils import read_frame, write_frame
 
@@ -65,6 +66,7 @@ class RelayServer:
         self._mesh_task: asyncio.Task | None = None
         self._me_addr: set[str] = set()
         self._pending_dials: set[str] = set()
+        self._pending_acks: dict[str, list[dict]]
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -170,7 +172,7 @@ class RelayServer:
                 for rid, c in list(self._mesh_conns.items()):
                     if c is conn:
                         self._mesh_conns.pop(rid, None)
-                    conn.close()
+                conn.close()
     
     def _broadcast_mesh(self, msg: dict) -> None:
         for conn in self._mesh_conns.values():
@@ -186,6 +188,24 @@ class RelayServer:
         
         if msg_type == "mesh_add" and peer_id and relay_id:
             self._mesh_presence[peer_id] = relay_id
+            if peer_id in self._store:
+                queued = self._store.pop(peer_id, [])
+                remote_conn = self._mesh_conns.get(relay_id)
+                if remote_conn and remote_conn.alive:
+                    for payload in queued:
+                        wrap = {"type": "mesh_stored_forward", "to": peer_id, "payload": payload.hex()}
+                        t = asyncio.create_task(remote_conn.send_msg(wrap))
+                        self._bg_tasks.add(t)
+                        t.add_done_callback(self._bg_tasks.discard)
+            if peer_id in self._pending_acks:
+                acks = self._pending_acks.pop(peer_id, [])
+                remote_conn = self._mesh_conns.get(relay_id)
+                if remote_conn and remote_conn.alive:
+                    for ack in acks:
+                        wrap = {"type": "mesh_ack", "to": peer_id, "from": ack["from"], "message_id": ack["message_id"]}
+                        t = asyncio.create_task(remote_conn.send_msg(wrap))
+                        self._bg_tasks.add(t)
+                        t.add_done_callback(self._bg_tasks.discard)
         elif msg_type == "mesh_remove" and peer_id:
             self._mesh_presence.pop(peer_id, None)
         elif msg_type == "mesh_forward":
@@ -198,14 +218,27 @@ class RelayServer:
                 await target.send_msg({"type": "push", "from": from_id, "payload": payload_hex, "message_id": msg_id})
             else:
                 self._store_payload(target_id, bytes.fromhex(payload_hex))
+        elif msg_type == "mesh_stored_forward":
+            target_id = msg.get("to")
+            payload_hex = msg.get("payload")
+            target = self._online.get(target_id)
+            if target and target.alive:
+                wrap = {"type": "stored_message", "payload": payload_hex}
+                t = asyncio.create_task(target.send_msg(wrap))
+                self._bg_tasks.add(t)
+                t.add_done_callback(self._bg_tasks.discard)
+            else:
+                self._store_payload(target_id, bytes.fromhex(payload_hex))
         elif msg_type == "mesh_ack":
             target_id = msg.get("to")
             from_id = msg.get("from")
             msg_id = msg.get("message_id")
             target = self._online.get(target_id)
-            if target:
+            if target and target.alive:
                 await target.send_msg({"type": "delivery_ack", "from": from_id, "message_id": msg_id})
-        
+            else:
+                self._store_pending_ack(target_id, {"from": from_id, "message_id": msg_id})
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer_addr = writer.get_extra_info("peername")
         
@@ -234,6 +267,7 @@ class RelayServer:
             self._broadcast_mesh({"type": "mesh_add", "peer_id": conn.peer_id, "relay_id": self.relay_id})
             await conn.send_msg({"type": "ok"})
             await self._flush_stored(conn)
+            await self._flush_pending_acks(conn)
 
             while conn.alive:
                 try:
@@ -286,19 +320,24 @@ class RelayServer:
         if not target_id:
             return
         target = self._online.get(target_id)
-        if target:
+        if target and target.alive:
             await target.send_msg({"type": "delivery_ack", "from": sender.peer_id, "message_id": msg_id})
         elif target_id in self._mesh_presence:
             remote_relay_id = self._mesh_presence[target_id]
             remote_conn = self._mesh_conns.get(remote_relay_id)
             if remote_conn and remote_conn.alive:
                 await remote_conn.send_msg({"type": "mesh_ack", "to": target_id, "from": sender.peer_id, "message_id": msg_id })
+            else:
+                self._store_pending_ack(target_id, {"from": sender.peer_id, "message_id": msg_id})
+        else:
+            self._store_pending_ack(target_id, {"from": sender.peer_id, "message_id": msg_id})
 
     async def _handle_mesh_reg(self, msg: dict, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, addr: tuple) -> None:
         remote_relay_id = msg.get("relay_id")
         await _write_msg(writer, {"type": "mesh_ok", "relay_id": self.relay_id})
 
         if remote_relay_id == self.relay_id:
+            writer.close()
             return
         
         conn = RelayConnection(peer_id=addr[0], reader=reader, writer=writer)
@@ -326,6 +365,25 @@ class RelayServer:
         if len(queue) > STORE_MAX_MESSAGES:
             queue.pop(0)
             logger.warning(f"store full for {peer_id[:12]}, dropping oldest msg")
+    
+    def _store_pending_ack(self, peer_id: str, ack_data: dict) -> None:
+        queue = self._pending_acks.setdefault(peer_id, [])
+        queue.append(ack_data)
+        if len(queue) > STORE_MAX_MESSAGES:
+            queue.pop(0)
+            logger.warning(f"pending ack store full for {peer_id[:12]}, dropping oldest ack")
+    
+    async def _flush_pending_acks(self, conn: RelayConnection) -> None:
+        peer_id = conn.peer_id
+        acks = self._pending_acks.pop(peer_id, [])
+        if acks:
+            logger.debug(f"flushing pending acks to {peer_id[:12]}")
+        for ack in acks:
+            try:
+                await conn.send_msg({"type": "delivery_ack", "from": ack["from"], "message_id": ack["message_id"]})
+            except Exception as e:
+                logger.error(f"failed to flush ack to {peer_id[:12]}, {e}")
+                break
 
     
     def _unregister(self, conn: RelayConnection) -> None:
@@ -344,7 +402,7 @@ class RelayServer:
                     wrap = {"type": "stored_message", "payload": msg.hex()}
                     await conn.send_msg(wrap)
                 except Exception as e:
-                    logger.error(f"failed to flush {conn.peer_id[:12], {e}}")
+                    logger.error(f"failed to flush {conn.peer_id[:12]} {e}")
                     self._store[conn.peer_id] = messages[messages.index(msg):]
                     break
             

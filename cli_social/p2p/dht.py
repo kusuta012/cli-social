@@ -99,7 +99,7 @@ class DHTNode:
             logger.error(f"parsing failed for peer info {peer_id[:12]} {e}")
             return None
 
-    async def is_online(self, peer_id: str, threshold_seconds: int = 45) -> bool:
+    async def is_online(self, peer_id: str, threshold_seconds: int = 90) -> bool:
         info = await self.lookup(peer_id)
         if not info or not info.last_seen:
             return False

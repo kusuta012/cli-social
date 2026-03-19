@@ -207,7 +207,7 @@ class Storage:
        # ignore these random comments ahh
        
        #tung tung tung tung tung tung tung sahur :O
-    async def mark_delivered(self, client_id: int) -> None:
+    async def mark_delivered(self, client_id: str) -> None:
         await self._db.execute(
             "UPDATE messages SET delivered = 1 WHERE client_message_id = ?", (client_id,)
         )

@@ -230,12 +230,12 @@ class InputBar(Horizontal):
         border-top: solid $primary;
         background: $boost;
     }
-    #messages-input {
+    #message-input {
         width: 1fr;
         border: none;
         background: transparent;
     }
-    #messages-input:focus {
+    #message-input:focus {
         border: none;
     }
     """
