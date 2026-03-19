@@ -38,6 +38,13 @@ class PeerInfo:
             noise_pubkey_hex=d.get("noise_pubkey_hex", ""),
             home_relay=d.get("home_relay", "")
         )
+    
+    @property
+    def fingerprint(self) -> str:
+        if not self.noise_pubkey_hex:
+            return ""
+        import hashlib
+        return hashlib.sha256(bytes.fromhex(self.noise_pubkey_hex)).hexdigest()
 
 class DHTNode:
     def __init__(

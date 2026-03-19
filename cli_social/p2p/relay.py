@@ -3,6 +3,9 @@ import asyncio
 import json
 import logging
 import socket
+import hashlib
+import secrets
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cli_social.p2p.registry import fetch_and_vrfy_registry
 from cli_social.p2p.utils import read_frame, write_frame
 
@@ -10,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 STORE_MAX_MESSAGES = 100
 MAX_CONCURRENT_CONN = 500
-
 
 async def _write_msg(writer: asyncio.StreamWriter, msg: dict) -> None:
     await write_frame(writer, json.dumps(msg).encode())
@@ -65,6 +67,9 @@ class RelayServer:
         self._me_addr: set[str] = set()
         self._pending_dials: set[str] = set()
         self._pending_acks: dict[str, list[dict]] = {}
+        self._trusted_relay_ids: set[str] = set()
+        self._ip_conns: dict[str, int] = {}
+        self._max_per_ip: int = 5
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -98,6 +103,7 @@ class RelayServer:
         while True:
             try:
                 relays = await fetch_and_vrfy_registry(None, accept_community=False)
+                self._trusted_relay_ids = {r.get("id") for r in relays if r.get("id")}
                 for r in relays:
                     targ_id = r.get("id")
                     addr = r.get("address", "")
@@ -245,6 +251,12 @@ class RelayServer:
             writer.close()
             return
             
+        client_ip = peer_addr[0] if peer_addr else "unknown"
+        if self._ip_conns.get(client_ip, 0) >= self._max_per_ip:
+            logger.warning(f"rate limit, too many connections from {client_ip}")
+            writer.close()
+            return
+        self._ip_conns[client_ip] = self._ip_conns.get(client_ip, 0) + 1
         conn: RelayConnection | None = None
         logger.info(f"new conn from {peer_addr}")
 
@@ -256,8 +268,39 @@ class RelayServer:
                 await self._handle_mesh_reg(msg, reader, writer, peer_addr)
                 return
             
-            if msg_type != "register" or not msg.get("peer_id"):
+            if msg_type != "register" or not msg.get("peer_id") or not msg.get("public_key"):
                 await _write_msg(writer, {"type": "error", "reason": "first message must register"})
+                return
+            peer_id = msg["peer_id"]
+            public_key_hex = msg["public_key"]
+
+            try:
+                pub_bytes = bytes.fromhex(public_key_hex)
+                if hashlib.sha256(pub_bytes).hexdigest() != peer_id:
+                    await _write_msg(writer, {"type": "error", "reason": "public key does not match peer id"})
+                    return
+            except ValueError:
+                await _write_msg(writer, {"type": "error", "reason": "invalid public key"})
+                return
+            
+            nonce = secrets.token_hex(32)
+            await _write_msg(writer, {"type": "challenge", "nonce": nonce})
+
+            try:
+                resp = await asyncio.wait_for(_read_msg(reader), timeout=10)
+            except asyncio.TimeoutError:
+                await _write_msg(writer, {"type": "error", "reason": "challenge timeout"})
+                return
+            
+            if resp.get("type") != "challenge_response" or not resp.get("signature"):
+                await _write_msg(writer, {"type": "error", "reason": "invalid challenge response"})
+                return
+            
+            try:
+                ed_pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
+                ed_pub.verify(bytes.fromhex(resp["signature"]), nonce.encode())
+            except Exception:
+                await _write_msg(writer, {"type": "error", "reason": "auth failed"})
                 return
 
             conn = RelayConnection(peer_id=msg["peer_id"], reader=reader, writer=writer)
@@ -283,6 +326,7 @@ class RelayServer:
         except (asyncio.IncompleteReadError, ConnectionResetError):
             logger.error(f"peer {conn.peer_id[:12] if conn else peer_addr} disconnected")
         finally:
+            self._ip_conns[client_ip] = max(0, self._ip_conns.get(client_ip, 0) - 1)
             if conn:
                 self._online.pop(conn.peer_id, None)
                 self._broadcast_mesh({"type": "mesh_remove", "peer_id": conn.peer_id})
@@ -332,6 +376,11 @@ class RelayServer:
 
     async def _handle_mesh_reg(self, msg: dict, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, addr: tuple) -> None:
         remote_relay_id = msg.get("relay_id")
+        if remote_relay_id not in self._trusted_relay_ids:
+            logger.warning(f"rejected mesh connection from untrusted relay: {remote_relay_id}")
+            await _write_msg(writer, {"type": "error", "reason": "not in trusted registry"})
+            writer.close()
+            return
         await _write_msg(writer, {"type": "mesh_ok", "relay_id": self.relay_id})
 
         if remote_relay_id == self.relay_id:

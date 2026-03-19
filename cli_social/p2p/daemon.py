@@ -36,6 +36,7 @@ class Daemon:
         relay_host: str | None = None,
         relay_port: int | None = None,
         cached_relay: dict | None = None,
+        ed25519_private_key=None
     ):
         self.peer_id = peer_id
         self.private_key = private_key
@@ -48,6 +49,7 @@ class Daemon:
         self.relay_host = relay_host
         self.relay_port = relay_port
         self.cached_relay = cached_relay
+        self.ed25519_private_key = ed25519_private_key
         self._dht: DHTNode | None = None
         self._storage: Storage | None = None
         self._running = False
@@ -152,7 +154,7 @@ class Daemon:
         if not pubkey_hex:
             raise ValueError("target public key unknown")
         
-        encrypted_blob = await encrypt_blob(self.peer_id, self.private_key, bytes.fromhex(pubkey_hex), content, client_msg_id)
+        encrypted_blob = await encrypt_blob(self.peer_id, self.private_key, bytes.fromhex(pubkey_hex), content, client_msg_id, ed25519_private_key=self.ed25519_private_key)
         msg = {"type": "publish", "to": target_peer_id, "payload": encrypted_blob.hex(), "message_id": client_msg_id}
         await write_frame(self._relay_writer, json.dumps(msg).encode())
         logger.debug(f"pushed packet {client_msg_id[:8]} to relay for {target_peer_id}")
@@ -162,14 +164,19 @@ class Daemon:
             reader, writer = await asyncio.open_connection(
                 self.relay_host, self.relay_port
             )
-            reg = json.dumps(
-                {"type": "register", "peer_id": self.peer_id, "mode": "listen"}
-            ).encode()
-            await write_frame(writer, reg)
-
-            ack = json.loads(await read_frame(reader))
-            if ack.get("type") != "ok":
-                logger.error(f"relay register failed {ack.get('reason')}")
+            reg = {"type": "register", "peer_id": self.peer_id}
+            if self.ed25519_private_key:
+                pub_bytes = self.ed25519_private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+                reg["public_key"] = pub_bytes.hex()
+            await write_frame(writer, json.dumps(reg).encode())
+            resp = json.loads(await read_frame(reader))
+            if resp.get("type") == "challenge" and self.ed25519_private_key:
+                nonce = resp["nonce"]
+                signature = self.ed25519_private_key.sign(nonce.encode())
+                await write_frame(writer, json.dumps({"type": "challenge_response", "signature": signature.hex(),}).encode())            
+                resp = json.loads(await read_frame(reader))
+            if resp.get("type") != "ok":
+                logger.error(f"relay register failed {resp.get('reason')}")
                 writer.close()
                 return
             self._relay_reader = reader
@@ -203,6 +210,8 @@ class Daemon:
                         logger.error(f"failed to process push, {e}")
                 elif msg_type == "relay_ack":
                     msg_id = msg.get("message_id")
+                    if self._storage:
+                        await self._storage.mark_relayed(msg_id)
                     if self.status_callback:
                         await self.status_callback(msg_id, "relayed")
                 elif msg_type == "delivery_ack":

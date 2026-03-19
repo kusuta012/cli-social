@@ -209,7 +209,14 @@ class Storage:
        #tung tung tung tung tung tung tung sahur :O
     async def mark_delivered(self, client_id: str) -> None:
         await self._db.execute(
-            "UPDATE messages SET delivered = 1 WHERE client_message_id = ?", (client_id,)
+            "UPDATE messages SET delivered = 2 WHERE client_message_id = ?", (client_id,)
+        )
+        await self._db.commit()
+    
+    # ballerina cappuccina
+    async def mark_relayed(self, client_id: str) -> None:
+        await self._db.execute(
+            "UPDATE messages SET delivered = 1 WHERE client_message_id = ? AND delivered = 0", (client_id,)
         )
         await self._db.commit()
 

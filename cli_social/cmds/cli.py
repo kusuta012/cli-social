@@ -17,7 +17,7 @@ from cli_social.p2p.daemon import Daemon
 from cli_social.p2p.dht import DHTNode
 from cli_social.p2p.relay import RelayServer
 from cli_social.identity import sign_registry_doc
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 DEFAULT_BOOTSTRAP_NODES = [
@@ -36,7 +36,7 @@ DATA_DIR_OPTION = click.option(
     envvar="SXCL_DATA_DIR"
 )
 
-def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str, Ed25519PublicKey]:
+def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str, Ed25519PublicKey, Ed25519PrivateKey]:
     key_file = _key_file_for(data_dir)
     if not identity_exists(key_file):
         click.echo("No identity found. Run `sxcl init` first.")
@@ -45,10 +45,10 @@ def _require_identity(data_dir: Path | None) -> tuple[str, bytes, str, Ed25519Pu
     passphrase = click.prompt("Passphrase", hide_input=True)
     
     try:
-        private_key,public_key, peer_id, username, noise_private_bytes = load_identity(passphrase, key_file)
-        return peer_id, noise_private_bytes, username, public_key
+        private_key, public_key, peer_id, username, noise_private_bytes = load_identity(passphrase, key_file)
+        return peer_id, noise_private_bytes, username, public_key, private_key
     except ValueError:
-        click.echo("Wrong passphrase! you forgot your password?? dumbahh")
+        click.echo("Wrong passphrase! you forgot your password??")
         raise SystemExit(1)
     
 @click.group()
@@ -120,7 +120,7 @@ def init(data_dir):
 @main.command()
 @DATA_DIR_OPTION
 def whoami(data_dir):
-    peer_id, _, username, public_key = _require_identity(data_dir)
+    peer_id, _, username, public_key, _ = _require_identity(data_dir)
     pub_key_hex = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     click.echo(f"   Username : {username or '(none)'}")
     click.echo(f"   Peer ID  : {peer_id}")
@@ -143,7 +143,7 @@ def tui(dht_port, bootstrap, relay, data_dir):
     )
     
     from cli_social.tui import run
-    peer_id, private_key, username, _, = _require_identity(data_dir)    
+    peer_id, private_key, username, _, ed25519_key = _require_identity(data_dir)    
     
     bootstrap_nodes = []
     if bootstrap:
@@ -158,14 +158,14 @@ def tui(dht_port, bootstrap, relay, data_dir):
         rh, rp = relay.rsplit(":", 1)
         relay_host, relay_port = rh, int(rp)
         
-    run(peer_id=peer_id, private_key=private_key, username=username, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes, db_path=db_path_for(data_dir), relay_host=relay_host, relay_port=relay_port)
+    run(peer_id=peer_id, private_key=private_key, username=username, dht_port=dht_port, bootstrap_nodes=bootstrap_nodes, db_path=db_path_for(data_dir), relay_host=relay_host, relay_port=relay_port, ed25519_key=ed25519_key)
 
 @main.command()
 @DATA_DIR_OPTION
 @click.option("--dht-port", default=6969, help="DHT listen port")
 @click.option("--bootstrap", multiple=True, help="Bootstrap nodes as host:port")
 def daemon(dht_port, bootstrap, data_dir):
-    peer_id, private_key, username, _ = _require_identity(data_dir)
+    peer_id, private_key, username, _, ed25519_key = _require_identity(data_dir)
     
     bootstrap_nodes = []
     if bootstrap:
@@ -182,7 +182,8 @@ def daemon(dht_port, bootstrap, data_dir):
             username=username,
             dht_port=dht_port,
             bootstrap_nodes=bootstrap_nodes,
-            db_path=db_path_for(data_dir)
+            db_path=db_path_for(data_dir),
+            ed25519_private_key=ed25519_key
         )
         await d.start()
         click.echo(f"DHT port {dht_port}")
