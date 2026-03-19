@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 import logging
 import uuid
 import json
@@ -237,9 +238,8 @@ class ChatPane(Vertical):
         fp_str = ""
         if self.current_fingerprint:
             fp = self.current_fingerprint
-            fp_str = f" [dim]({fp[:8]}...{fp[-8:]})[/dim]"
+            fp_str = f" [bold magenta](Safety: {fp[:6]})[/bold magenta]" # majestic magenta :3
         header.update(f"{name}{fp_str} {dot}")
-
 
 class InputBar(Horizontal):
     DEFAULT_CSS = """
@@ -488,7 +488,12 @@ class CLISocialApp(App):
                     badge_label.update(f" {name}")
 
         if contact and contact.get("fingerprint"):
-            chat.current_fingerprint = contact["fingerprint"]
+            my_noise_hex = self._daemon.noise_pubkey_hex if self._daemon else ""
+            if my_noise_hex:
+                my_fp = hashlib.sha256(bytes.fromhex(my_noise_hex)).hexdigest()
+                their_fp = contact["fingerprint"]
+                combined = "".join(sorted([my_fp, their_fp]))
+                chat.current_fingerprint = hashlib.sha256(combined.encode()).hexdigest()
         chat.set_status("connecting")
         if self._daemon and self._daemon._dht:
 

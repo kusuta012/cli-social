@@ -1,17 +1,18 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional
 from kademlia.network import Server
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DHT_PORT = 6969
-
-
 @dataclass
 class PeerInfo:
     peer_id: str
@@ -19,14 +20,22 @@ class PeerInfo:
     last_seen: str = ""
     noise_pubkey_hex: str = ""
     home_relay: str = ""
+    ed25519_pubkey_hex: str = ""
+    signature: str = ""
     
+    def _get_signable_data(self) -> bytes:
+        d = f"{self.peer_id}:{self.username}:{self.last_seen}:{self.noise_pubkey_hex}:{self.home_relay}:{self.ed25519_pubkey_hex}"
+        return d.encode()
+
     def to_json(self) -> str:
         return json.dumps({
             "peer_id": self.peer_id,
             "username": self.username,
             "last_seen": self.last_seen,
             "noise_pubkey_hex": self.noise_pubkey_hex,
-            "home_relay": self.home_relay
+            "home_relay": self.home_relay,
+            "ed25519_pubkey_hex": self.ed25519_pubkey_hex,
+            "signature": self.signature
         })
     @classmethod
     def from_json(cls, data:str) -> "PeerInfo":
@@ -36,7 +45,9 @@ class PeerInfo:
             username=d.get("username", ""),
             last_seen=d.get("last_seen", ""),
             noise_pubkey_hex=d.get("noise_pubkey_hex", ""),
-            home_relay=d.get("home_relay", "")
+            home_relay=d.get("home_relay", ""),
+            ed25519_pubkey_hex=d.get("ed25519_pubkey_hex", ""),
+            signature=d.get("signature", "")
         )
     
     @property
@@ -45,6 +56,19 @@ class PeerInfo:
             return ""
         import hashlib
         return hashlib.sha256(bytes.fromhex(self.noise_pubkey_hex)).hexdigest()
+    
+    def is_valid(self) -> bool:
+        if not self.ed25519_pubkey_hex or not self.signature:
+            return False
+        try:
+            pub_bytes = bytes.fromhex(self.ed25519_pubkey_hex)
+            if hashlib.sha256(pub_bytes).hexdigest() != self.peer_id:
+                return False
+            pub_key = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            pub_key.verify(bytes.fromhex(self.signature), self._get_signable_data())
+            return True
+        except Exception:
+            return False
 
 class DHTNode:
     def __init__(
@@ -52,12 +76,14 @@ class DHTNode:
         peer_id: str,
         host: str = "0.0.0.0",
         port: int = DEFAULT_DHT_PORT,
-        bootstrap_nodes: list[tuple[str, int]] | None = None
+        bootstrap_nodes: list[tuple[str, int]] | None = None,
+        ed25519_private_key=None
     ):
         self.peer_id = peer_id
         self.host = host
         self.port = port
         self.bootstrap_nodes = bootstrap_nodes or []
+        self.ed25519_private_key = ed25519_private_key
         self._server = Server(ksize=8, alpha=5)
         self._started = False
     
@@ -92,6 +118,10 @@ class DHTNode:
             noise_pubkey_hex=noise_pubkey_hex,
             home_relay=home_relay
         )
+        if self.ed25519_private_key:
+            pub_bytes = self.ed25519_private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+            info.ed25519_pubkey_hex = pub_bytes.hex()
+            info.signature = self.ed25519_private_key.sign(info._get_signable_data()).hex()
         await self._server.set(self.peer_id, info.to_json())
         logger.info(f"Announced self to DHT {self.peer_id[:12]} on relay {home_relay}")
         
@@ -101,7 +131,11 @@ class DHTNode:
             logger.debug(f"peer {peer_id[:12]} not found")
             return None
         try:
-            return PeerInfo.from_json(result)
+            info = PeerInfo.from_json(result)
+            if info.ed25519_pubkey_hex and not info.is_valid():
+                logger.error(f"DHT signature verification failed for {peer_id[:12]}")
+                return None
+            return info
         except Exception as e:
             logger.error(f"parsing failed for peer info {peer_id[:12]} {e}")
             return None
