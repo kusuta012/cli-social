@@ -34,7 +34,7 @@ async def encrypt_blob(our_peer_id: str, our_private_key: bytes, their_pubkey: b
             "client_message_id": client_message_id
     }
     if ed25519_private_key:
-        inner_bytes = json.dumps(inner, sort_keys=True).encode()
+        inner_bytes = json.dumps(inner, separators=(',', ':'), sort_keys=True).encode()
         inner["signature"] = ed25519_private_key.sign(inner_bytes).hex()
         inner["ed25519_pubkey"] = ed25519_private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     payload = json.dumps(inner).encode()
@@ -57,7 +57,7 @@ async def decrypt_blob(our_private_key: bytes, encrypted_blob: bytes) -> dict:
         if expected_peer_id != data.get("peer_id"):
             raise ValueError("sender pubkey does not match claimed peer id (SPOOFING ALERT!)")
         ed_pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
-        verify_data = json.dumps({k: v for k, v in data.items()}, sort_keys=True).encode()
+        verify_data = json.dumps({k: v for k, v in data.items()}, separators=(',', ':'), sort_keys=True).encode()
         ed_pub.verify(bytes.fromhex(signature_hex), verify_data)
         data["verified"] = True
     else:

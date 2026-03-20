@@ -33,6 +33,8 @@ class RelayConnection:
         self.writer = writer
         self._alive = True
         self.is_listener: bool = False
+        self.msg_count_wind = 0
+        self.wind_start = asyncio.get_event_loop().time()
         
     async def send_msg(self, msg: dict) -> None:
         await _write_msg(self.writer, msg)
@@ -78,8 +80,15 @@ class RelayServer:
     async def start(self) -> None:
         db_path = os.getenv("RELAY_DB_PATH", "relay.db")
         self._db = await aiosqlite.connect(db_path)
-        await self._db.execute("CREATE TABLE IF NOT EXISTS store (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id TEXT NOT NULL, payload BLOB NOT NULL)")
+        await self._db.execute("CREATE TABLE IF NOT EXISTS store (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id TEXT NOT NULL, payload BLOB NOT NULL, message_id TEXT)")
+        try:
+            await self._db.execute("ALTER TABLE store ADD COLUMN message_id TEXT")
+            await self._db.commit()
+        except aiosqlite.OperationalError:
+            pass
         await self._db.execute("CREATE TABLE IF NOT EXISTS pending_acks (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id TEXT NOT NULL, from_id TEXT NOT NULL, message_id TEXT NOT NULL)")
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_store_peer ON store(peer_id)")
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_acks_peer ON pending_acks(peer_id)")
         await self._db.commit()
         self._server = await asyncio.start_server(
             self._handle_client,
@@ -204,13 +213,13 @@ class RelayServer:
             self._mesh_presence[peer_id] = relay_id
             if not self._db:
                 return
-            async with self._db.execute("SELECT id, payload FROM store WHERE peer_id = ?", (peer_id,)) as cur:
+            async with self._db.execute("SELECT id, payload, message_id FROM store WHERE peer_id = ?", (peer_id,)) as cur:
                 stored = await cur.fetchall()
             remote_conn = self._mesh_conns.get(relay_id)
             if stored and remote_conn and remote_conn.alive:
                 s_ids = []
-                for r_id, p in stored:
-                        wrap = {"type": "mesh_stored_forward", "to": peer_id, "payload": p.hex()}
+                for r_id, p, m_id in stored:
+                        wrap = {"type": "mesh_stored_forward", "to": peer_id, "payload": p.hex(), "message_id": m_id}
                         t = asyncio.create_task(remote_conn.send_msg(wrap))
                         self._bg_tasks.add(t)
                         t.add_done_callback(self._bg_tasks.discard)
@@ -218,7 +227,7 @@ class RelayServer:
                 if s_ids:
                     await self._db.execute(f"DELETE FROM store WHERE id IN ({','.join('?' for _ in s_ids)})", s_ids)
                     await self._db.commit()
-            async with self._db.execute("SELECT id, payload FROM store WHERE peer_id = ?", (peer_id,)) as cur:
+            async with self._db.execute("SELECT id, from_id, message_id FROM pending_acks WHERE peer_id = ?", (peer_id,)) as cur:
                 acks = await cur.fetchall()
             if acks and remote_conn and remote_conn.alive:
                 a_ids = []
@@ -242,18 +251,19 @@ class RelayServer:
             if target and target.alive:
                 await target.send_msg({"type": "push", "from": from_id, "payload": payload_hex, "message_id": msg_id})
             else:
-                self._store_payload(target_id, bytes.fromhex(payload_hex))
+                self._store_payload(target_id, bytes.fromhex(payload_hex), msg_id=msg_id or "")
         elif msg_type == "mesh_stored_forward":
             target_id = msg.get("to")
             payload_hex = msg.get("payload")
+            msg_id = msg.get("message_id")
             target = self._online.get(target_id)
             if target and target.alive:
-                wrap = {"type": "stored_message", "payload": payload_hex}
+                wrap = {"type": "stored_message", "payload": payload_hex, "message_id": msg_id}
                 t = asyncio.create_task(target.send_msg(wrap))
                 self._bg_tasks.add(t)
                 t.add_done_callback(self._bg_tasks.discard)
             else:
-                self._store_payload(target_id, bytes.fromhex(payload_hex))
+                self._store_payload(target_id, bytes.fromhex(payload_hex), msg_id=msg_id or "")
         elif msg_type == "mesh_ack":
             target_id = msg.get("to")
             from_id = msg.get("from")
@@ -319,7 +329,8 @@ class RelayServer:
             
             try:
                 ed_pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
-                ed_pub.verify(bytes.fromhex(resp["signature"]), nonce.encode())
+                auth_payload = f"cli-sxcl-relay-auth-v1:{nonce}".encode()
+                ed_pub.verify(bytes.fromhex(resp["signature"]), auth_payload)
             except Exception:
                 await _write_msg(writer, {"type": "error", "reason": "auth failed"})
                 return
@@ -337,6 +348,17 @@ class RelayServer:
                     action_type = action.get("type")
 
                     if action_type == "publish":
+                        now = asyncio.get_event_loop().time()
+                        if now - conn.wind_start > 45:
+                            conn.wind_start = now
+                            conn.msg_count_wind = 0
+                        
+                        conn.msg_count_wind += 1
+                        if conn.msg_count_wind > 45:
+                            logger.warning(f"peer {conn.peer_id[:12]} exceeded rate limit, dropping")
+                            await conn.send_msg({"type": "error", "reason": "rate limit exceeded"})
+                            conn.close()
+                            break
                         await self._handle_publish(conn, action)
                     elif action_type == "client_ack":
                         await self._handle_client_ack(conn, action)
@@ -374,7 +396,7 @@ class RelayServer:
                 await remote_conn.send_msg({"type": "mesh_forward", "to": target_id, "from": sender.peer_id, "payload": payload, "message_id": msg_id})
                 await sender.send_msg({"type": "relay_ack", "message_id": msg_id, "status": "relayed"})
                 return
-        self._store_payload(target_id, bytes.fromhex(payload))
+        self._store_payload(target_id, bytes.fromhex(payload), msg_id=msg_id)
         await sender.send_msg({"type": "relay_ack", "message_id": msg_id, "status": "relayed"})
     
     async def _handle_client_ack(self, sender: RelayConnection, msg: dict) -> None:
@@ -427,11 +449,11 @@ class RelayServer:
             self._mesh_conns.pop(remote_relay_id, None)
             conn.close()
         
-    def _store_payload(self, peer_id: str, payload: bytes) -> None:
+    def _store_payload(self, peer_id: str, payload: bytes, msg_id: str = "") -> None:
         async def _save():
             if not self._db:
                 return
-            await self._db.execute("INSERT INTO store (peer_id, payload) VALUES (?, ?)", (peer_id, payload))
+            await self._db.execute("INSERT INTO store (peer_id, payload, message_id) VALUES (?, ?, ?)", (peer_id, payload, msg_id))
             await self._db.commit()
         t = asyncio.create_task(_save())
         self._bg_tasks.add(t)
@@ -476,14 +498,14 @@ class RelayServer:
         if not self._db:
             return
         peer_id = conn.peer_id
-        async with self._db.execute("SELECT id, payload FROM store WHERE peer_id = ?", (peer_id,)) as cur:
+        async with self._db.execute("SELECT id, payload, message_id FROM store WHERE peer_id = ?", (peer_id,)) as cur:
             stored = await cur.fetchall()
         if stored:
             logger.debug(f"flushing {len(stored)} stored to {peer_id[:12]}")
             s_ids = []
-            for r_id, p in stored:
+            for r_id, p, m_id in stored:
                 try:
-                    await conn.send_msg({"type": "stored_message", "payload": p.hex()})
+                    await conn.send_msg({"type": "stored_message", "payload": p.hex(), "message_id": m_id})
                     s_ids.append(r_id)
                 except Exception as e:
                     logger.error(f"failed to flush msg to {peer_id[:12]}, {e}")

@@ -132,8 +132,8 @@ class DHTNode:
             return None
         try:
             info = PeerInfo.from_json(result)
-            if info.ed25519_pubkey_hex and not info.is_valid():
-                logger.error(f"DHT signature verification failed for {peer_id[:12]}")
+            if not info.is_valid():
+                logger.error(f"DHT signature verification failed for {peer_id[:12]} it is unsigned or invalid signature")
                 return None
             return info
         except Exception as e:

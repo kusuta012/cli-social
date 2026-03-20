@@ -99,6 +99,8 @@ class Daemon:
             if client_message_id in self._recent_message_ids:
                 return
             self._recent_message_ids.append(client_message_id)
+            if self._storage and await self._storage.is_msg_dup(client_message_id):
+                return
         if self._storage:
             await self._storage.save_message(peer_id=peer_id, sender_peer_id=peer_id, content=content, is_outgoing=False)
         if self.on_message:
@@ -173,7 +175,8 @@ class Daemon:
             resp = json.loads(await read_frame(reader))
             if resp.get("type") == "challenge" and self.ed25519_private_key:
                 nonce = resp["nonce"]
-                signature = self.ed25519_private_key.sign(nonce.encode())
+                auth_payload = f"cli-sxcl-relay-auth-v1:{nonce}".encode()
+                signature = self.ed25519_private_key.sign(auth_payload)
                 await write_frame(writer, json.dumps({"type": "challenge_response", "signature": signature.hex(),}).encode())            
                 resp = json.loads(await read_frame(reader))
             if resp.get("type") != "ok":
@@ -224,13 +227,16 @@ class Daemon:
                         await self.status_callback(msg_id, "delivered")                      
                 elif msg_type == "stored_message":
                     payload_hex = msg.get("payload")
+                    client_msg_id = msg.get("message_id")
                     try:
                         decrypted = await decrypt_blob(self.private_key, bytes.fromhex(payload_hex))
                         sender_id = decrypted.get("peer_id", "unknown")
-                        client_msg_id = decrypted.get("client_message_id")
+                        if not client_msg_id:
+                            client_msg_id = decrypted.get("client_message_id")
                         await self._on_message(peer_id=sender_id, content=decrypted["content"], client_message_id=client_msg_id)
-                        ack = {"type": "client_ack", "to": sender_id, "message_id": client_msg_id}
-                        await write_frame(writer, json.dumps(ack).encode())
+                        if client_msg_id:
+                            ack = {"type": "client_ack", "to": sender_id, "message_id": client_msg_id}
+                            await write_frame(writer, json.dumps(ack).encode())
                     except Exception as e:
                         logger.error(f"failed to decrypt stored msg, {e}")
                 elif msg_type == "ping":

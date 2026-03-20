@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import aiosqlite
-from cryptography import fernet
 import platformdirs
 import base64
 from cryptography.fernet import Fernet, InvalidToken
@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS messages (
     is_outgoing INTEGER NOT NULL DEFAULT 0,
     delivered INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_client_id ON messages(client_message_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_peer ON conversations(peer_id);
 """
 
 def db_path_for(data_dir: Path | None) -> Path:
@@ -60,7 +64,8 @@ class Storage:
     async def open(cls, db_path: Path = DEFAULT_DB_PATH, encryption_key: bytes | None = None) -> "Storage":
         fernet = None
         if encryption_key:
-            key_b64 = base64.urlsafe_b64encode(encryption_key[:32].ljust(32, b'\0'))
+            digest = hashlib.sha256(encryption_key).digest()
+            key_b64 = base64.urlsafe_b64encode(digest)
             fernet = Fernet(key_b64)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         db = await aiosqlite.connect(db_path)
@@ -259,3 +264,7 @@ class Storage:
                         pass
                 messages.append(msg)
             return messages
+    
+    async def is_msg_dup(self, client_id: str) -> bool:
+        async with self._db.execute("SELECT 1 FROM messages where client_message_id = ?", (client_id,)) as cur:
+            return await cur.fetchone() is not None
