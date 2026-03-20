@@ -94,10 +94,9 @@ sxcl daemon
 *registry command is only for the owner of this project to sign the node registry*
 
 ## Demo
+[Screencast_20260320_193259.webm](https://github.com/user-attachments/assets/73328586-aff7-4f87-acc7-3b724430ad77)
 
-https://user-cdn.hackclub-assets.com/019d0b95-b904-7517-b69d-7b717b3913ef/Screencast_20260320_193259.webm
-https://user-cdn.hackclub-assets.com/019d0b96-372d-7331-9e71-4aa28ab5da60/Screencast_20260320_193731.webm
-
+[Screencast_20260320_193731.webm](https://github.com/user-attachments/assets/379877ce-0fd4-4989-9ff7-f1bf46e5d6bd)
 
 ## Architecture & Security
 
