@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "timestamp": 1774014309,
+  "version": 7,
+  "timestamp": 1774021733,
   "relays": [
     {
       "id": "relay_fef07710",
@@ -14,7 +14,7 @@
       }
     },
     {
-      "id": "relay_f6d48494",
+      "id": "relay_d054dfd8",
       "address": "tcp://40.233.121.197:49515",
       "roles": [
         "relay"
@@ -92,6 +92,6 @@
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "fa88fc41a8f55e10e5d0f9fcf27c0b90a9bbb54a8adcd62a21caad935a17e6da633edddc5689028e16aa50175e933176b7ac44364d59c2aeda6a007194708e0f"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "be1d2bbf607926228e6cf21fe659a5be8d23b3d9968487adb84cab61f46ee48d7489d12a384378428924885af12bba6f2c90ccbd167bec0aead0bb850212b904"
   }
 }
