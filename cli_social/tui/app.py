@@ -211,12 +211,12 @@ class ChatPane(Vertical):
 
         banner = Static(
             r"""
- ██████╗██╗     ██╗    ███████╗██╗  ██╗ ██████╗██╗     
-██╔════╝██║     ██║    ██╔════╝╚██╗██╔╝██╔════╝██║     
-██║     ██║     ██║    ███████╗ ╚███╔╝ ██║     ██║     
-██║     ██║     ██║    ╚════██║ ██╔██╗ ██║     ██║     
-╚██████╗███████╗██║    ███████║██╔╝ ██╗╚██████╗███████╗
- ╚═════╝╚══════╝╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝                                         
+             ██████╗██╗     ██╗    ███████╗██╗  ██╗ ██████╗██╗     
+            ██╔════╝██║     ██║    ██╔════╝╚██╗██╔╝██╔════╝██║     
+            ██║     ██║     ██║    ███████╗ ╚███╔╝ ██║     ██║     
+            ██║     ██║     ██║    ╚════██║ ██╔██╗ ██║     ██║     
+            ╚██████╗███████╗██║    ███████║██╔╝ ██╗╚██████╗███████╗
+             ╚═════╝╚══════╝╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝                                         
             """,
             classes="ascii-banner",
         )
@@ -290,9 +290,8 @@ class ChatPane(Vertical):
         fp_str = ""
         if self.current_fingerprint:
             fp = self.current_fingerprint
-            fp_str = f" [bold magenta](Safety: {fp[:6]})[/bold magenta]"  # majestic magenta :3
+            fp_str = f" [bold #C20114](Fingerprint: {fp[:6]})[/bold #C20114]"  # hate magenta :3
         header.update(f"{name}{fp_str} {dot}")
-
 
 class InputBar(Horizontal):
     DEFAULT_CSS = """

@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DHT_PORT = 6969
+DEFAULT_DHT_PORT = 63012
 @dataclass
 class PeerInfo:
     peer_id: str

@@ -28,7 +28,7 @@ class Daemon:
         peer_id: str,
         private_key: bytes,
         username: str = "",
-        dht_port: int = 6969,
+        dht_port: int = 63012,
         bootstrap_nodes: list[tuple[str, int]] | None = None,
         on_message: MessageCallback | None = None,
         status_callback: StatusCallback | None = None,
