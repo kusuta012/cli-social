@@ -3,12 +3,13 @@ requires = ["setuptools>=70", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cli-social"
-version = "0.1.0"
-description = ""
+name = "sxcl"
+version = "1.0.1"
+description = "A decentralized, end-to-end encrypted terminal messenger"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
+keywords = ["p2p", "messenger", "encryption", "terminal", "tui", "decentralized"]
 
 dependencies = [
     "cryptography",
@@ -26,6 +27,11 @@ dev = [
     "pytest",
     "pytest-asyncio"
 ]
+
+[project.urls]
+Homepage = "https://github.com/kusuta012/cli-social"
+Repository = "https://github.com/kusuta012/cli-social"
+Issues = "https://github.com/kusuta012/cli-social/issues"
 
 [project.scripts]
 sxcl = "cli_social.cmds.cli:main"

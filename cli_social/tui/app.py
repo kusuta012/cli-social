@@ -13,6 +13,8 @@ from textual.widgets import Header, Footer, Static, Input, ListView, ListItem, L
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.reactive import reactive
 from textual.screen import ModalScreen
+from textual.message import Message
+from textual import on
 from cli_social.storage import Storage, DEFAULT_DB_PATH
 from cli_social.p2p.daemon import Daemon
 
@@ -30,7 +32,7 @@ class ConversationItem(ListItem):
     def compose(self) -> ComposeResult:
         unread_badge = f" [bold red]({self.unread})[/bold red]" if self.unread else ""
         name = self.username or self.peer_id[:12] + "..."
-        yield Label(f" {name}{unread_badge}", classes="convo-label")
+        yield Label(f" [bold #babbf1]{name}[/bold #babbf1]{unread_badge}", classes="convo-label")
 
 
 class Sidebar(Vertical):
@@ -150,7 +152,7 @@ class MessageBubble(Static):
 
 class ChatPane(Vertical):
     DEFAULT_CSS = """
-    ChatPane {
+    ChatPane {  
         width: 1fr;
         background: $surface;
     }
@@ -184,13 +186,26 @@ class ChatPane(Vertical):
         scroll = ScrollableContainer(id="message-scroll")
         banner = Static(
             r"""
-             ██████╗██╗     ██╗    ███████╗██╗  ██╗ ██████╗██╗     
-            ██╔════╝██║     ██║    ██╔════╝╚██╗██╔╝██╔════╝██║     
-            ██║     ██║     ██║    ███████╗ ╚███╔╝ ██║     ██║     
-            ██║     ██║     ██║    ╚════██║ ██╔██╗ ██║     ██║     
-            ╚██████╗███████╗██║    ███████║██╔╝ ██╗╚██████╗███████╗
-             ╚═════╝╚══════╝╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝                                         
-            """,
+                                                                                
+                                                                                
+                                                                                
+   ▒████▒  ██         ██████              ▒████▒   ██▓  ▓██    ▒████▒  ██       
+  ▓██████  ██         ██████             ▒██████   ▒██  ██▒   ▓██████  ██       
+ ▒██▒  ░█  ██           ██               ██▒  ▒█    ██▓▓██   ▒██▒  ░█  ██       
+ ██▓       ██           ██               ██         ▒████▒   ██▓       ██       
+ ██░       ██           ██               ███▒        ████    ██░       ██       
+ ██        ██           ██               ▒█████▒     ▒██▒    ██        ██       
+ ██        ██           ██                ░█████▒    ▒██▒    ██        ██       
+ ██░       ██           ██      █████        ▒███    ████    ██░       ██       
+ ██▓       ██           ██      █████          ██   ▒████▒   ██▓       ██       
+ ▒██▒  ░█  ██           ██               █▒░  ▒██   ██▒▒██   ▒██▒  ░█  ██       
+  ▓██████  ████████   ██████             ███████▒  ▒██  ██▒   ▓██████  ████████ 
+   ▒████▒  ████████   ██████             ░█████▒   ██▓  ▓██    ▒████▒  ████████ 
+                                                                                
+                                                                                
+                                                                                
+                                                                                    
+    """,
             classes="ascii-banner",
         )
 
@@ -198,6 +213,7 @@ class ChatPane(Vertical):
             banner.styles.width = "100%"
             banner.styles.height = "100%"
             banner.styles.padding = (4, 8)
+            banner.styles.color = "#f38ba8"
             yield banner
 
     async def close_chat(self) -> None:
@@ -211,24 +227,36 @@ class ChatPane(Vertical):
 
         banner = Static(
             r"""
-             ██████╗██╗     ██╗    ███████╗██╗  ██╗ ██████╗██╗     
-            ██╔════╝██║     ██║    ██╔════╝╚██╗██╔╝██╔════╝██║     
-            ██║     ██║     ██║    ███████╗ ╚███╔╝ ██║     ██║     
-            ██║     ██║     ██║    ╚════██║ ██╔██╗ ██║     ██║     
-            ╚██████╗███████╗██║    ███████║██╔╝ ██╗╚██████╗███████╗
-             ╚═════╝╚══════╝╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝                                         
+                                                                                
+                                                                                
+                                                                                
+   ▒████▒  ██         ██████              ▒████▒   ██▓  ▓██    ▒████▒  ██       
+  ▓██████  ██         ██████             ▒██████   ▒██  ██▒   ▓██████  ██       
+ ▒██▒  ░█  ██           ██               ██▒  ▒█    ██▓▓██   ▒██▒  ░█  ██       
+ ██▓       ██           ██               ██         ▒████▒   ██▓       ██       
+ ██░       ██           ██               ███▒        ████    ██░       ██       
+ ██        ██           ██               ▒█████▒     ▒██▒    ██        ██       
+ ██        ██           ██                ░█████▒    ▒██▒    ██        ██       
+ ██░       ██           ██      █████        ▒███    ████    ██░       ██       
+ ██▓       ██           ██      █████          ██   ▒████▒   ██▓       ██       
+ ▒██▒  ░█  ██           ██               █▒░  ▒██   ██▒▒██   ▒██▒  ░█  ██       
+  ▓██████  ████████   ██████             ███████▒  ▒██  ██▒   ▓██████  ████████ 
+   ▒████▒  ████████   ██████             ░█████▒   ██▓  ▓██    ▒████▒  ████████ 
+                                                                                
+                                                                                
+                                                                                
+                                                                                                                  
             """,
             classes="ascii-banner",
         )
         banner.styles.content_align = ("center", "middle")
-        banner.styles.color = "white"
+        banner.styles.color = "#f38ba8"
         banner.styles.height = "100%"
 
         await scroll.mount(banner)
 
     async def load_messages(
-        self, peer_id: str, username: str, db_path: Path = DEFAULT_DB_PATH
-    ) -> None:
+        self, peer_id: str, username: str) -> None:
         self.current_peer_id = peer_id
         self.current_username = username
         self.current_fingerprint = ""
@@ -290,8 +318,8 @@ class ChatPane(Vertical):
         fp_str = ""
         if self.current_fingerprint:
             fp = self.current_fingerprint
-            fp_str = f" [bold #C20114](Fingerprint: {fp[:6]})[/bold #C20114]"  # hate magenta :3
-        header.update(f"{name}{fp_str} {dot}")
+            fp_str = f" [bold #8c8fa1](Fingerprint: {fp[:6]})[/bold #8c8fa1]"  # hate magenta :3
+        header.update(f"[bold #babbf1]{name}[/bold #babbf1]{fp_str} {dot}")
 
 class InputBar(Horizontal):
     DEFAULT_CSS = """
@@ -371,7 +399,7 @@ class ChatModal(ModalScreen):
 
 
 class CLISocialApp(App):
-    TITLE = "cli-social"
+    TITLE = "cli-sxcl"
     SUB_TITLE = "decentralized encrypted messaging"
     CSS = """
     Screen {
@@ -402,8 +430,7 @@ class CLISocialApp(App):
         peer_id: str,
         private_key: bytes,
         username: str,
-        listen_port: int = 63012,
-        dht_port: int = 6969,
+        dht_port: int = 63012,
         bootstrap_nodes: list[tuple[str, int]] | None = None,
         db_path: Path = DEFAULT_DB_PATH,
         relay_host: str | None = None,
@@ -414,7 +441,6 @@ class CLISocialApp(App):
         self.peer_id = peer_id
         self.private_key = private_key
         self.username = username
-        self.listen_port = listen_port
         self.dht_port = dht_port
         self.bootstrap_nodes = bootstrap_nodes or []
         self.db_path = db_path
@@ -446,7 +472,7 @@ class CLISocialApp(App):
         return await Storage.open(self.db_path, encryption_key=self.private_key)
 
     async def on_mount(self) -> None:
-        self.sub_title = f"Peer ID: {self.peer_id[:12]}"
+        self.sub_title = f"Peer ID: {self.peer_id}"
         self.run_worker(self._start_daemon)
         await self._load_conversations()
         self.set_focus(self.query_one("#conversation-list"))
@@ -482,7 +508,7 @@ class CLISocialApp(App):
                     self._presence_refresh(), name="presence_refresh"
                 )
             self.notify(
-                f"Daemon up! | port {self.listen_port}",
+                f"Daemon up! | DHT port {self.dht_port}",
                 severity="information",
                 timeout=3,
             )
@@ -527,7 +553,7 @@ class CLISocialApp(App):
                 lv.index = i
                 chat = self.query_one(ChatPane)
                 await chat.load_messages(
-                    item.peer_id, item.username, db_path=self.db_path
+                    item.peer_id, item.username
                 )
                 self.set_focus(self.query_one("#message-input"))
 
@@ -537,7 +563,7 @@ class CLISocialApp(App):
             return
         chat = self.query_one(ChatPane)
 
-        await chat.load_messages(item.peer_id, item.username, db_path=self.db_path)
+        await chat.load_messages(item.peer_id, item.username)
 
         async with await self.get_db() as s:
             convo_id = await s.get_or_create_conversation(item.peer_id)
@@ -546,7 +572,7 @@ class CLISocialApp(App):
             item.unread = 0
             badge_label = item.query_one(".convo-label", Label)
             name = item.username or item.peer_id[:12] + "..."
-            badge_label.update(f" {name}")
+            badge_label.update(f" [bold #babbf1]{name}[/bold #babbf1]")
 
         if contact and contact.get("fingerprint"):
             my_noise_hex = self._daemon.noise_pubkey_hex if self._daemon else ""
@@ -690,8 +716,7 @@ def run(
     peer_id: str = "",
     private_key: bytes = b"",
     username: str = "",
-    listen_port: int = 63012,
-    dht_port: int = 6969,
+    dht_port: int = 63012,
     bootstrap_nodes: list[tuple[str, int]] | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     relay_host: str | None = None,
@@ -702,7 +727,6 @@ def run(
         peer_id=peer_id,
         private_key=private_key,
         username=username,
-        listen_port=listen_port,
         dht_port=dht_port,
         bootstrap_nodes=bootstrap_nodes or [],
         db_path=db_path,
