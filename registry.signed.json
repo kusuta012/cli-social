@@ -1,6 +1,6 @@
 {
-  "version": 5,
-  "timestamp": 1773927553,
+  "version": 6,
+  "timestamp": 1774014309,
   "relays": [
     {
       "id": "relay_fef07710",
@@ -25,7 +25,7 @@
       }
     },
     {
-      "id": "relay_4e5fa539",
+      "id": "relay_bd25f506",
       "address": "tcp://ip.kirze.de:8000",
       "roles": [
         "relay"
@@ -92,6 +92,6 @@
     }
   ],
   "signatures": {
-    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "ccc35d4f3cc490d3602d526ca6529874cfcf7e83217c4c7f28d509ca31d825dfa5b039a7219dc026f6d99af7936aedddd3ea4c0e816e30238878152e92f15103"
+    "60c01e07546f068b051fe54a2f0b0e34a67a129b6e9eccb235923706734def9c": "fa88fc41a8f55e10e5d0f9fcf27c0b90a9bbb54a8adcd62a21caad935a17e6da633edddc5689028e16aa50175e933176b7ac44364d59c2aeda6a007194708e0f"
   }
 }

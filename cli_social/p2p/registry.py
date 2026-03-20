@@ -19,7 +19,7 @@ def vrfy_registry_sign(public_key_hex: str, data: dict, sign_hex: str) -> bool:
         
         payload_to_vrfy = {k: v for k, v in data.items() if k != "signatures"}
         
-        message = json.dumps(payload_to_vrfy, sort_keys=True).encode('utf-8')
+        message = json.dumps(payload_to_vrfy, separators=(',', ':'),sort_keys=True).encode('utf-8')
         
         public_key.verify(sign_bytes, message)
         return True
