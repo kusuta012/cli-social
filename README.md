@@ -12,13 +12,13 @@ No central servers, No phone numbers. Just cryptographic identities and your ter
 
 ## Table of Contents
 
--[Features](#features)
--[Installation](#installation)
--[How to Use](#how-to-use)
--[Demo](#demo)
--[Architecture & Security](#architecture--security)
--[Running a node](#running-a-node)
--[Note for Shipwright](#note-for-shipwrights)
+- [Features](#features)
+- [Installation](#installation)
+- [How to Use](#how-to-use)
+- [Demo](#demo)
+- [Architecture & Security](#architecture--security)
+- [Running a node](#running-a-node)
+- [Note for Shipwright](#note-for-shipwrights)
 
 ---
 
