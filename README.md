@@ -95,6 +95,9 @@ sxcl daemon
 
 ## Demo
 
+https://user-cdn.hackclub-assets.com/019d0b95-b904-7517-b69d-7b717b3913ef/Screencast_20260320_193259.webm
+https://user-cdn.hackclub-assets.com/019d0b96-372d-7331-9e71-4aa28ab5da60/Screencast_20260320_193731.webm
+
 
 ## Architecture & Security
 
